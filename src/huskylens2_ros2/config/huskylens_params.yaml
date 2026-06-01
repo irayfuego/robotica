@@ -1,0 +1,12 @@
+### huskylens_params.yaml — Configuración del nodo HuskyLens 2
+# Ajustar i2c_bus y i2c_address según la Sección 6 de CALIBRACION.yaml
+
+huskylens_node:
+  ros__parameters:
+    i2c_bus:      1        # Bus I2C de la Raspberry Pi (1 = /dev/i2c-1 en RPi4)
+    i2c_address:  0x32     # Dirección por defecto DFRobot SEN0638
+    algorithm:    'object_recognition'  # Se puede sobreescribir en el launch
+    poll_rate:    10.0     # Hz
+    frame_id:     'camera_link'
+    image_width:  320      # Resolución de referencia para normalizar coordenadas
+    image_height: 240

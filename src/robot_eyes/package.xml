@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_eyes</name>
+  <version>1.0.0</version>
+  <description>
+    Librería de ojos animados para dos pantallas redondas GC9A01 (240x240, SPI).
+    Renderiza ojos con expresiones, comportamientos y seguimiento de mirada.
+    Se integra con huskylens2_ros2 para reaccionar a emociones y caras detectadas.
+  </description>
+  <maintainer email="yube00@hotmail.com">VY</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>python3-pillow</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <!-- SPI / GPIO — solo en hardware real (RPi 4B) -->
+  <!-- python3-spidev y python3-rpi.gpio se instalan manualmente si no están -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

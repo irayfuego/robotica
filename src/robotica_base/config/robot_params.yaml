@@ -1,0 +1,13 @@
+# Parámetros físicos del robot autónomo
+# Ajusta estos valores a tu robot real
+
+base_node:
+  ros__parameters:
+    wheel_base:   0.15     # metros entre ruedas izquierda y derecha
+    wheel_radius: 0.033    # metros de radio de las ruedas TT
+    max_speed:    0.5      # m/s velocidad máxima
+
+odometry_node:
+  ros__parameters:
+    wheel_base:   0.15
+    wheel_radius: 0.033

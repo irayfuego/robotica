@@ -1,0 +1,28 @@
+### laser_filter.yaml — laser_filters (LaserScanRangeFilter + ScanShadowsFilter)
+# Elimina lecturas del propio chasis y artefactos de sombra.
+# Ajusta min_range si el LIDAR detecta sus propias patas/soporte
+# (ver CALIBRACION.yaml, Sección 5).
+
+scan_filter_chain:
+
+  # ── 1. Filtro de rango ────────────────────────────────────────────────────
+  # Descarta lecturas más cercanas que min_range (dentro del cuerpo del robot)
+  # y más lejanas que max_range (ruido a larga distancia).
+  - name: range_filter
+    type: laser_filters/LaserScanRangeFilter
+    params:
+      use_message_range_limits: false
+      lower_threshold: 0.15    # [m] — radio mínimo; ajustar si el chasis aparece en el scan
+      upper_threshold: 10.0    # [m] — LD19 alcance nominal: 12 m, pero 10 m es fiable
+      lower_replacement_value: -.inf
+      upper_replacement_value: .inf
+
+  # ── 2. Filtro de sombras ──────────────────────────────────────────────────
+  # Elimina puntos "fantasma" en los bordes de objetos (artefacto de múltiple reflexión).
+  - name: shadow_filter
+    type: laser_filters/ScanShadowsFilter
+    params:
+      min_angle: 10     # [grados] — ángulo mínimo para considerar sombra
+      max_angle: 170    # [grados]
+      neighbors: 1
+      window: 1

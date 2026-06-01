@@ -1,0 +1,47 @@
+# =============================================================================
+# rrc_lite_params.yaml
+# Parámetros del driver RRC Lite / Huaner STM32
+# Robot: Mecanum 4WD + Encoders Hall 12PPR + relación 1:90
+#
+# ⚠️  CALIBRACIÓN PENDIENTE: mide tu chasis físico y actualiza estos valores.
+#     Usa el script de calibración de Hiwonder (ver docs) o mide con cinta.
+# =============================================================================
+
+rrc_lite_node:
+  ros__parameters:
+
+    # ── Puerto serie ─────────────────────────────────────────────────────────
+    device:   '/dev/ttyACM0'
+    baudrate: 1000000
+
+    # ── Geometría del chasis (MEDIR en el robot real) ─────────────────────────
+    # Chasis mecanum aluminio AliExpress (estimaciones iniciales — calibrar)
+    wheelbase:    0.148   # metros: distancia entre ejes delantero/trasero
+    track_width:  0.140   # metros: distancia entre centros de rueda izq/der
+    wheel_radius: 0.033   # metros: radio de las ruedas Mecanum (65mm diámetro)
+
+    # ── Límites de velocidad ─────────────────────────────────────────────────
+    max_linear_vel:  0.5   # m/s
+    max_angular_vel: 2.0   # rad/s
+
+    # ── Gimbal (plataforma 9IMOD Mini + 2 servos PWM) ─────────────────────────
+    gimbal_pan_id:  1      # ID servo PWM en la placa (pan  = eje Z)
+    gimbal_tilt_id: 2      # ID servo PWM en la placa (tilt = eje Y)
+    pan_center:  1500      # µs posición central (ajustar si no centra)
+    tilt_center: 1500      # µs posición central
+    pan_range:    500      # µs — movimiento máximo ±(pan_center ± pan_range)
+    tilt_range:   350      # µs — movimiento máximo
+
+    # ── Frames TF ────────────────────────────────────────────────────────────
+    odom_frame: 'odom'
+    base_frame: 'base_footprint'
+    imu_frame:  'imu_link'
+
+# =============================================================================
+# Notas sobre los encoders (para odometría futura con encoders reales):
+#   Motor TT metálico — codificador Hall 12 PPR, relación 1:90
+#   → Pulsos efectivos por revolución de rueda: 12 × 90 = 1080 PPR
+#   → Con cuadratura (×4): 4320 conteos/revolución
+#   La placa STM32 gestiona los encoders internamente y expone velocidad en RPS
+#   a través del protocolo serie (no se necesita leer ticks directamente).
+# =============================================================================

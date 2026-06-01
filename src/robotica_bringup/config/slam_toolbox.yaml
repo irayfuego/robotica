@@ -1,0 +1,54 @@
+### slam_toolbox.yaml — SLAM Toolbox (modo online asíncrono)
+# Para robot pequeño en interiores con LIDAR LD19.
+# Modo: online_async — construye mapa en tiempo real.
+# Guardar mapa: ros2 run nav2_map_server map_saver_cli -f ~/mapa
+
+slam_toolbox:
+  ros__parameters:
+
+    # ── Solver ────────────────────────────────────────────────────────────────
+    solver_plugin:              solver_plugins::CeresSolver
+    ceres_linear_solver:        SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner:       SCHUR_JACOBI
+    ceres_trust_strategy:       LEVENBERG_MARQUARDT
+    ceres_dogleg_type:          TRADITIONAL_DOGLEG
+    ceres_loss_function:        None
+
+    # ── Marcos TF ─────────────────────────────────────────────────────────────
+    odom_frame:      odom
+    map_frame:       map
+    base_frame:      base_footprint
+    scan_topic:      /scan_filtered    # salida del laser_filter_node
+    use_map_saver:   false
+    mode:            mapping           # mapping | localization
+
+    # ── Parámetros de scan ────────────────────────────────────────────────────
+    debug_logging:           false
+    throttle_scans:          1         # procesar 1 de cada N scans (1 = todos)
+    transform_publish_period: 0.02     # [s] frecuencia publicación TF map→odom
+    map_update_interval:     5.0       # [s] intervalo actualización del mapa
+    resolution:              0.05      # [m/celda] resolución del mapa de ocupación
+    max_laser_range:         8.0       # [m] recortar lecturas más lejanas (≤ upper_threshold del filtro)
+    minimum_time_interval:   0.5       # [s] mínimo tiempo entre scans para procesar
+    transform_timeout:       0.2       # [s] timeout para lookupTransform
+    tf_buffer_duration:      30.0      # [s]
+
+    # ── Loop closure ─────────────────────────────────────────────────────────
+    stack_size_to_use:       40000000  # bytes para la pila del solver
+
+    # ── Parámetros de correlación (scan matching) ─────────────────────────────
+    use_scan_matching:       true
+    use_scan_barycenter:     true
+    minimum_travel_distance: 0.5       # [m] mover este mínimo antes de procesar nuevo scan
+    minimum_travel_heading:  0.5       # [rad] ~28.6°
+    scan_buffer_size:        10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    distance_variance_penalty: 0.5
+    angle_variance_penalty:  1.0
+    fine_search_angle_offset: 0.00349  # [rad] ~0.2°
+    coarse_search_angle_offset: 0.349  # [rad] ~20°
+    coarse_angle_resolution:  0.0349   # [rad] ~2°
+    minimum_angle_penalty:    0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion:   true

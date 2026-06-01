@@ -1,0 +1,400 @@
+### nav2_params.yaml — Configuración Nav2 para robot Mecanum
+# Robot: ~30×30 cm, ruedas Mecanum, max 0.5 m/s lineal
+# LIDAR: LD19 en base del robot, scan topic: /scan_filtered
+# Odometría fusionada: /odom (EKF)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BT Navigator
+# ─────────────────────────────────────────────────────────────────────────────
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+    bt_loop_duration: 10            # ms
+    default_server_timeout: 20      # s
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ['navigate_to_pose', 'navigate_through_poses']
+    navigate_to_pose:
+      plugin: 'nav2_bt_navigator::NavigateToPoseNavigator'
+    navigate_through_poses:
+      plugin: 'nav2_bt_navigator::NavigateThroughPosesNavigator'
+    # Árbol de comportamiento por defecto
+    default_nav_to_pose_bt_xml: ''
+    default_nav_through_poses_bt_xml: ''
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Controller Server — Regulated Pure Pursuit para Mecanum
+# ─────────────────────────────────────────────────────────────────────────────
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 20.0         # Hz
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001    # Mecanum puede moverse en Y
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ['progress_checker']
+    goal_checker_plugins: ['general_goal_checker']
+    controller_plugins: ['FollowPath']
+
+    # ── Comprobador de progreso ───────────────────────────────────────────────
+    progress_checker:
+      plugin: 'nav2_controller::SimpleProgressChecker'
+      required_movement_radius: 0.5   # m en 10 s
+      movement_time_allowance: 10.0
+
+    # ── Comprobador de meta ───────────────────────────────────────────────────
+    general_goal_checker:
+      stateful: true
+      plugin: 'nav2_controller::SimpleGoalChecker'
+      xy_goal_tolerance: 0.10          # m
+      yaw_goal_tolerance: 0.10         # rad (~5.7°)
+
+    # ── Controlador de trayectoria ────────────────────────────────────────────
+    # DWB ofrece buena maniobrabilidad para Mecanum; RPP también funciona bien.
+    # Usamos DWB por su soporte explícito de vy (holonomic=true).
+    FollowPath:
+      plugin: 'dwb_core::DWBLocalPlanner'
+      debug_trajectory_details: false
+      min_vel_x: -0.4
+      min_vel_y: -0.4          # Mecanum: movimiento lateral
+      max_vel_x:  0.5
+      max_vel_y:  0.4
+      max_vel_theta: 1.5
+      min_speed_xy: 0.0
+      max_speed_xy: 0.5
+      min_speed_theta: 0.0
+      acc_lim_x:  2.5
+      acc_lim_y:  2.5
+      acc_lim_theta: 3.2
+      decel_lim_x:  -2.5
+      decel_lim_y:  -2.5
+      decel_lim_theta: -3.2
+      vx_samples:  20
+      vy_samples:  10          # muestras en Y para aprovechar Mecanum
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.10
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_score: true
+      stateful: true
+      # Función de puntuación de trayectorias
+      critics:
+        ['RotateToGoal', 'Oscillation', 'BaseObstacle',
+         'GoalAlign', 'PathAlign', 'PathDist', 'GoalDist']
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+      # Tópico de salida → twist_mux → rrc_lite_node
+      cmd_vel_topic: /cmd_vel/nav
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Planner Server — NavFn (Dijkstra global)
+# ─────────────────────────────────────────────────────────────────────────────
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    planner_plugins: ['GridBased']
+    GridBased:
+      plugin: 'nav2_navfn_planner::NavfnPlanner'
+      tolerance: 0.5
+      use_astar: false           # false = Dijkstra; true = A*
+      allow_unknown: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smoother Server
+# ─────────────────────────────────────────────────────────────────────────────
+smoother_server:
+  ros__parameters:
+    use_sim_time: false
+    smoother_plugins: ['simple_smoother']
+    simple_smoother:
+      plugin: 'nav2_smoother::SimpleSmoother'
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Behavior Server (recoveries)
+# ─────────────────────────────────────────────────────────────────────────────
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins:
+      ['spin', 'backup', 'drive_on_heading', 'assisted_teleop', 'wait']
+    spin:
+      plugin: 'nav2_behaviors::Spin'
+    backup:
+      plugin: 'nav2_behaviors::BackUp'
+    drive_on_heading:
+      plugin: 'nav2_behaviors::DriveOnHeading'
+    wait:
+      plugin: 'nav2_behaviors::Wait'
+    assisted_teleop:
+      plugin: 'nav2_behaviors::AssistedTeleop'
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Costmap local
+# ─────────────────────────────────────────────────────────────────────────────
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      rolling_window: true
+      width:  3          # m — ventana local
+      height: 3
+      resolution: 0.05
+      # Robot cuadrado ~30×30 cm con un poco de margen
+      robot_radius: 0.20
+      track_unknown_space: false
+      plugins: ['voxel_layer', 'inflation_layer']
+      voxel_layer:
+        plugin: 'nav2_costmap_2d::VoxelLayer'
+        enabled: true
+        publish_voxel_map: false
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          topic: /scan_filtered
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: 'LaserScan'
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: 'nav2_costmap_2d::InflationLayer'
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.40  # m — radio de inflar obstáculos (= robot_radius + margen)
+      always_send_full_costmap: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Costmap global
+# ─────────────────────────────────────────────────────────────────────────────
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      robot_radius: 0.20
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ['static_layer', 'obstacle_layer', 'inflation_layer']
+      static_layer:
+        plugin: 'nav2_costmap_2d::StaticLayer'
+        map_subscribe_transient_local: true
+      obstacle_layer:
+        plugin: 'nav2_costmap_2d::ObstacleLayer'
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan_filtered
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: 'LaserScan'
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: 'nav2_costmap_2d::InflationLayer'
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.40
+      always_send_full_costmap: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Map Server / Map Saver
+# ─────────────────────────────────────────────────────────────────────────────
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    yaml_filename: ''   # Se sobrescribe desde la línea de comandos
+
+map_saver:
+  ros__parameters:
+    use_sim_time: false
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMCL (localización con mapa guardado — no usado en modo SLAM activo)
+# ─────────────────────────────────────────────────────────────────────────────
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: base_footprint
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: map
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    laser_model_type: likelihood_field
+    max_beams: 60
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: odom
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: nav2_amcl::OmniMotionModel   # Mecanum → omnidireccional
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.25
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    scan_topic: /scan_filtered
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Velocity Smoother
+# ─────────────────────────────────────────────────────────────────────────────
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: 'OPEN_LOOP'
+    max_velocity:     [ 0.5,  0.4,  1.5]  # [vx, vy, vtheta]
+    min_velocity:     [-0.5, -0.4, -1.5]
+    max_accel:        [ 2.5,  2.5,  3.2]
+    max_decel:        [-2.5, -2.5, -3.2]
+    odom_topic: /odom
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lifecycle Manager
+# ─────────────────────────────────────────────────────────────────────────────
+lifecycle_manager:
+  ros__parameters:
+    use_sim_time: false
+    autostart: true
+    bond_timeout: 4.0
+    attempt_respawn_reconnection: true
+    bond_respawn_max_duration: 10.0
+    node_names:
+      - controller_server
+      - smoother_server
+      - planner_server
+      - behavior_server
+      - bt_navigator
+      - waypoint_follower
+      - velocity_smoother
+      - collision_monitor
+
+lifecycle_manager_slam:
+  ros__parameters:
+    use_sim_time: false
+    autostart: true
+    bond_timeout: 4.0
+    node_names:
+      - map_server
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Waypoint Follower
+# ─────────────────────────────────────────────────────────────────────────────
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: false
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: 'wait_at_waypoint'
+    wait_at_waypoint:
+      plugin: 'nav2_waypoint_follower::WaitAtWaypoint'
+      enabled: true
+      waypoint_pause_duration: 200  # ms
+
+
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+    cmd_vel_in_topic: /cmd_vel_out
+    cmd_vel_out_topic: cmd_vel
+    enable_stamped_cmd_vel: true
+    state_topic: collision_monitor_state
+    transform_tolerance: 0.5
+    source_timeout: 5.0
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+    observation_sources: [scan]
+    polygons: [FootprintApproach]
+    FootprintApproach:
+      type: polygon
+      action_type: approach
+      footprint_topic: /local_costmap/published_footprint
+      time_before_impact: 1.5
+      simulation_time_step: 0.02
+      min_points: 6
+      visualize: false
+      enabled: true
+    scan:
+      type: scan
+      topic: /scan_filtered
+
+opennav_docking:
+  ros__parameters:
+    controller_frequency: 50.0
+    dock_plugins: []
+    dock_database: ''

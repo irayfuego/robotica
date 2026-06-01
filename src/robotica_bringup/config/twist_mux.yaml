@@ -1,0 +1,41 @@
+### twist_mux.yaml — Multiplexor de velocidades
+# Prioridad mayor = más urgente. El canal con más prioridad bloquea a los inferiores
+# mientras esté publicando (timeout antes de liberar el canal).
+
+twist_mux:
+  ros__parameters:
+    topics:
+      # ── Seguridad (máxima prioridad) ────────────────────────────────────────
+      # Parada de emergencia desde panel físico o nodo de safety
+      emergency_stop:
+        topic:    /cmd_vel/emergency
+        timeout:  0.5    # segundos sin mensaje → libera el canal
+        priority: 100
+
+      # ── Teleop (joystick / teclado) ─────────────────────────────────────────
+      # Utilidad: anular la navegación autónoma manualmente
+      teleop:
+        topic:    /cmd_vel/teleop
+        timeout:  0.5
+        priority: 10
+
+      # ── Navegación autónoma (Nav2) ──────────────────────────────────────────
+      navigation:
+        topic:    /cmd_vel/nav
+        timeout:  0.5
+        priority: 5
+
+    # Tópico de salida → collision_monitor lo filtra y publica en /cmd_vel
+    output_topic: /cmd_vel_mux
+
+    locks:
+      # Opcional: bloqueo por software via /twist_mux/lock (std_msgs/Bool)
+      safety_lockout:
+        topic:    /twist_mux/lock
+        timeout:  0.0    # sin timeout, el bloqueo es persistente hasta que se libere
+        priority: 1000
+
+# NOTA: Nav2 publica en /cmd_vel directamente por defecto.
+# Para conectar con twist_mux renombra el parámetro cmd_vel_topic en nav2_params.yaml:
+#   FollowPath.cmd_vel_topic: /cmd_vel/nav
+# (ya configurado en nav2_params

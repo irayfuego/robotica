@@ -1,0 +1,42 @@
+### robot_eyes_params.yaml — Configuración de los ojos del robot
+# Pantallas: 2× GC9A01 240×240 round, conectadas por SPI0 a la RPi 4B
+#
+# Cableado por defecto:
+#   Left eye  → SPI0 CS0 (GPIO 8)
+#   Right eye → SPI0 CS1 (GPIO 7)
+#   DC        → GPIO 25
+#   RST       → GPIO 27
+#   BL        → GPIO 18  (PWM backlight)
+#   MOSI      → GPIO 10
+#   SCLK      → GPIO 11
+
+robot_eyes_node:
+  ros__parameters:
+    fps:        30          # Hz de render
+    sim_mode:   false       # true = sin pantallas reales (test en PC)
+    auto_idle:  true        # parpadeo y miradas aleatorias en reposo
+
+    # Color del iris  [R, G, B]  0-255
+    iris_color: [60, 120, 200]
+
+    # Color de fondo fuera del círculo del ojo
+    background: [10, 10, 15]
+
+    # Configuración SPI / GPIO
+    display_config:
+      spi_bus:    0
+      dc_pin:     25
+      rst_pin:    27
+      bl_pin:     18
+      spi_speed:  40000000   # 40 MHz
+
+huskylens_bridge_node:
+  ros__parameters:
+    interface:    'uart'        # 'uart' | 'i2c'
+    port:         '/dev/serial0'
+    baudrate:     9600
+    mode:         6             # 6 = EMOTION_RECOGNITION
+    rate:         20.0          # Hz de lectura
+    lost_timeout: 1.5           # s sin detección → idle
+    confidence:   60            # 0-100 confianza mínima
+    emotion_hold: 0.8           # s que debe mantenerse la emoción

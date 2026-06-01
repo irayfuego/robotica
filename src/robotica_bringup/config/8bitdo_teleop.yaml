@@ -1,0 +1,54 @@
+### 8bitdo_teleop.yaml — Teleop con mando 8BitDo Ultimate 2C (modo Android, Bluetooth)
+#
+# Ejes (joy_node SDL, modo Android):
+#   0 = Left stick X  (izquierda=-1, derecha=+1)
+#   1 = Left stick Y  (adelante=-1, atrás=+1)   ← invertido
+#   2 = Right stick X (izquierda=-1, derecha=+1) ← para yaw
+#   3 = Right stick Y
+#   4 = Right trigger (RT) 0→+1
+#   5 = Left trigger  (LT) 0→+1
+#
+# Botones:
+#   0=A  1=B  3=X  4=Y  6=LB  7=RB  10=Select  11=Start  13=L3  14=R3
+#
+# NOTA: Si los ejes no coinciden, comprueba con:
+#   ros2 topic echo /joy
+# y ajusta axis_linear/axis_angular según lo que veas.
+
+teleop_twist_joy_node:
+  ros__parameters:
+    # TwistStamped (estándar Nav2 Jazzy)
+    publish_stamped_twist: true
+    frame_id: base_link
+
+    # Deadman: mantener RB (botón 7) pulsado para mover el robot
+    require_enable_button: true
+    enable_button: 7          # RB — botón de seguridad (deadman)
+    enable_turbo_button: 6    # LB — velocidad máxima mientras se mantiene
+
+    # Ejes lineales (robot Mecanum: X=adelante/atrás, Y=lateral)
+    axis_linear:
+      x: 1       # Left stick Y → adelante/atrás
+      y: 0       # Left stick X → deslizamiento lateral (mecanum)
+    scale_linear:
+      x: -0.4    # Negativo: eje arriba=-1, queremos +v hacia adelante
+      y: -0.4    # Negativo: eje izquierda=-1, queremos +v hacia la izquierda
+    scale_linear_turbo:
+      x: -0.8
+      y: -0.8
+
+    # Eje angular (yaw)
+    axis_angular:
+      yaw: 2     # Right stick X → giro
+    scale_angular:
+      yaw: -1.2  # Negativo: ajusta sentido de giro si es necesario
+    scale_angular_turbo:
+      yaw: -2.0
+
+joy_node:
+  ros__parameters:
+    device_id: 0
+    device_name: ""           # Dejar vacío para usar device_id; o poner "8BitDo Ultimate 2C"
+    deadzone: 0.10            # Los sticks del 8BitDo derivan un poco; 0.10 evita movimiento fantasma
+    autorepeat_rate: 20.0     # Hz — publica aunque no haya cambio (necesario para el deadman timeout)
+    coalesce_interval_ms: 1
