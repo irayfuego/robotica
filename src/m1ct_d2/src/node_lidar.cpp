@@ -264,17 +264,21 @@ int read_forever()
 							printf("full----- count=%d,time=%lld\n",scan_count,current_times());
 							node_lidar.lidar_time.scan_time_record = node_lidar.lidar_time.scan_time_current;
 						}
-						node_lidar.lidar_time.scan_start_time = node_lidar.lidar_time.tim_scan_start;
-						node_lidar.lidar_time.scan_end_time = node_lidar.lidar_time.tim_scan_end;
-						if(node_lidar.lidar_time.tim_scan_start != node_lidar.lidar_time.tim_scan_end)
+						// Use system clock for scan timing — LIDAR hw timestamps unreliable after 1st scan
 						{
-							node_lidar.lidar_time.tim_scan_start = node_lidar.lidar_time.tim_scan_end;
+							static uint64_t prev_scan_end_ms = 0;
+							uint64_t now_ms = (uint64_t)current_times();
+							if(prev_scan_end_ms == 0) prev_scan_end_ms = now_ms - 100;
+							node_lidar.lidar_time.scan_start_time = prev_scan_end_ms * 1000000ULL;
+							node_lidar.lidar_time.scan_end_time   = now_ms * 1000000ULL;
+							prev_scan_end_ms = now_ms;
 						}
 
 						memcpy(node_lidar.scan_node_buf, local_scan, scan_count * sizeof(node_info));
 						node_lidar.scan_node_count = scan_count;
 						node_lidar.lidar_time.scan_time_current = current_times();
-						node_lidar._dataEvent.set();
+						node_lidar.lidar_status.isConnected = true;  // Fix E: refresh under lock
+					node_lidar._dataEvent.set();
 						node_lidar._lock.unlock();
 					}
 					scan_count = 0;
@@ -305,6 +309,7 @@ result_t grabScanData(uint32_t timeout) {
 			{
 				node_lidar._lock.lock();
 				if (node_lidar.scan_node_count == 0) {
+					node_lidar._lock.unlock();  // Fix: avoid lock leak
 					return RESULT_FAIL;
 				}
 				node_lidar._lock.unlock();
@@ -357,12 +362,10 @@ int send_lidar_data(LaserScan &outscan)
 		outscan.config.scan_time =  static_cast<float>(scan_time * 1.0 / 1e9);
     	outscan.config.time_increment = outscan.config.scan_time / (double)(count - 1);
 		outscan.stamp = node_lidar.lidar_time.scan_start_time;
-		std::cout << "scantime:" << outscan.config.scan_time << "stamp:" << outscan.stamp << std::endl;
 		//scan_msg->header.frame_id = node_lidar.lidar_general_info.frame_id;
 		//scan_msg->header.stamp = ros::Time::now();
 
-		if(node_lidar.lidar_status.isConnected)
-		{
+		// isConnected gate removed (Fix F) — count>0 always true here
 			//outscan.points.clear();
 			float range = 0;
 			float angle = 0.0;
@@ -407,22 +410,21 @@ int send_lidar_data(LaserScan &outscan)
 				outscan.points.push_back(point);
 			}
 
-			node_lidar._lock.unlock();
+	}
+	// Single unlock - previously double-unlocked when isConnected=true (crash fix)
+	node_lidar._lock.unlock();
 
-			/*雷达被遮挡判断*/
-			
-			node_lidar.optimize_lidar.lidar_blocked_judge(count);
+	if(node_lidar.lidar_status.isConnected)
+	{
+		/*雷达被遮挡判断*/
+		node_lidar.optimize_lidar.lidar_blocked_judge(count);
 
-
-			if (node_lidar.lidar_status.FilterEnable)
-			{
-				node_lidar.optimize_lidar.PointCloudFilter(&outscan);
-			}
-
-
+		if (node_lidar.lidar_status.FilterEnable)
+		{
+			node_lidar.optimize_lidar.PointCloudFilter(&outscan);
 		}
 	}
-	node_lidar._lock.unlock();
+	return 0;  // Fix G: prevent UB missing-return optimization killing data_handling branch
 }
 
 /*设置串口信息的函数*/
@@ -560,6 +562,12 @@ int node_start(int argc, char **argv)
       "lidar_status", 10, topic_callback);*/
 	
 	
+	// Spin node in background thread for proper DDS graph participation
+	auto executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+	executor->add_node(node);
+	std::thread executor_thread([executor]() { executor->spin(); });
+	executor_thread.detach();
+
 	bool ret_init = initialize();
 
 	if(!ret_init){
@@ -588,7 +596,7 @@ int node_start(int argc, char **argv)
 	
 	node_lidar.lidar_status.lidar_ready = true;
 	
-	auto laser_pub = node->create_publisher<sensor_msgs::msg::LaserScan>("scan", 1);
+	auto laser_pub = node->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::SensorDataQoS());
 	
 	while(rclcpp::ok())
 	{
@@ -614,8 +622,10 @@ int node_start(int argc, char **argv)
 			}
 			node_lidar.serial_port->write_data(end_lidar,4);
 			node_lidar.lidar_status.lidar_ready = false;
-
 			sleep(1);
+			// Auto-restart after abnormal state (prevents false-positive blockage lockup)
+			node_lidar.lidar_status.lidar_abnormal_state = 0;
+			node_lidar.lidar_status.lidar_ready = true;
 		}
 		LaserScan scan;
 		if(data_handling(scan))
@@ -625,8 +635,8 @@ int node_start(int argc, char **argv)
 			scan_msg->ranges.resize(scan.points.size());
 			scan_msg->intensities.resize(scan.points.size());
 
-			scan_msg->header.stamp.sec = RCL_NS_TO_S(scan.stamp);;
-			scan_msg->header.stamp.nanosec = scan.stamp - RCL_S_TO_NS(scan_msg->header.stamp.sec);
+			// Use ROS clock for correct timestamp (boot-time stamp causes DDS assertion)
+			scan_msg->header.stamp = node->get_clock()->now();
 			scan_msg->header.frame_id = node_lidar.lidar_general_info.frame_id;
 
 			scan_msg->angle_min = scan.config.min_angle;
@@ -640,7 +650,7 @@ int node_start(int argc, char **argv)
 				scan_msg->ranges[i] = scan.points[i].range;
 				scan_msg->intensities[i] = scan.points[i].intensity;
 			}
-			//printf("publish--------\n");
+			{ static int pub_count=0; if((++pub_count % 100)==0) printf("Published %d scans, ranges=%zu\n", pub_count, scan_msg->ranges.size()); }
 			laser_pub->publish(*scan_msg);
       	}
 	}
