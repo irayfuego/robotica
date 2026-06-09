@@ -1,7 +1,7 @@
 m1ct_d2_node:
   ros__parameters:
     port: /dev/sc_mini        # udev symlink para CH340 (VID=1a86 PID=7523)
-    frame_id: base_laser      # coincide con el TF base_link→base_laser del bringup
+    frame_id: laser_link      # coincide con el TF base_link→laser_link del bringup
     ignore_array: ""
     baudrate: 230400
     samp_rate: 9

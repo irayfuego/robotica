@@ -93,17 +93,26 @@ def generate_launch_description():
     )
 
     # ── TFs estaticos (siempre) ────────────────────────────────────────────────
-    # base_link → base_laser: necesario para costmaps
+    # base_link → laser_link: posicion del LIDAR respecto al centro del robot
+    # NOTA: el LIDAR publica frame_id='laser_link'; este TF debe usar ESE nombre.
     base_laser_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='base_link_to_base_laser',
-        arguments=['0', '0', '0.18', '0', '0', '0', 'base_link', 'base_laser'],
+        name='base_link_to_laser_link',
+        arguments=['0', '0', '0.18', '0', '0', '0', 'base_link', 'laser_link'],
+    )
+
+    # base_footprint → base_link (siempre; en hardware lo necesita el EKF también)
+    base_footprint_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_footprint_to_base_link',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'base_link'],
     )
 
     # ── TFs estaticos falsos (solo en sim_mode) ────────────────────────────────
     # Sin hardware no hay EKF ni SLAM publicando TFs.
-    # Cadena completa: map → odom → base_footprint → base_link → base_laser
+    # Cadena completa: map → odom → base_footprint → base_link → laser_link
     sim_map_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -116,13 +125,6 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='sim_odom_to_base_footprint',
         arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_footprint'],
-        condition=IfCondition(sim_mode),
-    )
-    sim_base_tf = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='sim_base_footprint_to_base_link',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'base_link'],
         condition=IfCondition(sim_mode),
     )
 
@@ -195,9 +197,9 @@ def generate_launch_description():
 
         # TFs
         base_laser_tf,
+        base_footprint_tf,
         sim_map_tf,
         sim_odom_tf,
-        sim_base_tf,
 
         twist_mux_node,
 
