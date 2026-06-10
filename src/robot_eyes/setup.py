@@ -28,7 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_eyes_node  = robot_eyes.ros_node:main',
-            'huskylens_bridge = robot_eyes.huskylens_bridge_node:main',
+            'huskylens_bridge = robot_eyes.huskylens_gaze_bridge:main',
         ],
     },
 )

@@ -1,50 +1,33 @@
 #!/usr/bin/env python3
 """
 Behavior library for robot eyes.
-Contains all pre-defined animations and behaviors.
+Emotion behaviors are PERSISTENT: they animate TO the state and stay there
+until a new emotion or 'neutral' overrides them.
 """
 
 import random
-from typing import Optional, Tuple
 from .eye_renderer import EyeState
 from .animation_engine import Animation, Keyframe, EasingType
 
+# Channel masks: which EyeState channels a behavior controls.
+# Unlisted channels come from the engine's base state, so glances and
+# blinks no longer wipe out the active emotion or iris color.
+CH_GAZE       = frozenset({'gaze'})
+CH_LIDS       = frozenset({'lids'})
+CH_PUPIL      = frozenset({'pupil'})
+CH_GAZE_PUPIL = frozenset({'gaze', 'pupil'})
+
 
 # ---------------------------------------------------------------------------
-# Canonical "open eye" state (reference for building animations from)
+# Reference states
 # ---------------------------------------------------------------------------
-OPEN = EyeState(
-    gaze_x=0.0, gaze_y=0.0,
-    upper_lid=1.0, lower_lid=0.0,
-    pupil_size=0.5,
-    iris_color=(60, 120, 200),
-    squint=0.0
-)
-
-CLOSED = EyeState(
-    gaze_x=0.0, gaze_y=0.0,
-    upper_lid=0.0, lower_lid=1.0,
-    pupil_size=0.5,
-    iris_color=(60, 120, 200),
-    squint=0.0
-)
-
-HALF_CLOSED = EyeState(
-    gaze_x=0.0, gaze_y=0.0,
-    upper_lid=0.35, lower_lid=0.2,
-    pupil_size=0.45,
-    iris_color=(60, 120, 200),
-    squint=0.1
-)
-
 
 def _open(gaze_x=0.0, gaze_y=0.0, pupil=0.5, iris_color=(60, 120, 200)) -> EyeState:
     return EyeState(
         gaze_x=gaze_x, gaze_y=gaze_y,
         upper_lid=1.0, lower_lid=0.0,
-        pupil_size=pupil,
-        iris_color=iris_color,
-        squint=0.0
+        pupil_size=pupil, iris_color=iris_color,
+        squint=0.0, eyebrow=0.0,
     )
 
 
@@ -52,449 +35,397 @@ def _closed(gaze_x=0.0, gaze_y=0.0) -> EyeState:
     return EyeState(
         gaze_x=gaze_x, gaze_y=gaze_y,
         upper_lid=0.0, lower_lid=0.8,
-        pupil_size=0.3,
-        iris_color=(60, 120, 200),
+        pupil_size=0.3, iris_color=(60, 120, 200),
     )
 
 
-class BehaviorLibrary:
-    """
-    Factory class for all robot eye behaviors.
-    Returns Animation objects ready to be played by AnimationEngine.
-    """
+OPEN        = _open()
+CLOSED      = _closed()
+HALF_CLOSED = EyeState(
+    upper_lid=0.35, lower_lid=0.2, pupil_size=0.45,
+    iris_color=(60, 120, 200), squint=0.1,
+)
 
-    # -----------------------------------------------------------------------
-    # BASIC BEHAVIORS
-    # -----------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Emotion target states (module-level, importable for set_base_expression)
+# ---------------------------------------------------------------------------
+
+EMOTION_STATES = {
+    "neutral": _open(),
+
+    "happy": EyeState(
+        upper_lid=0.85, lower_lid=0.25, pupil_size=0.60,
+        iris_color=(80, 180, 120), squint=0.30,
+    ),
+
+    "sad": EyeState(
+        gaze_x=0.0, gaze_y=0.35,
+        upper_lid=0.55, lower_lid=0.10, pupil_size=0.35,
+        iris_color=(60, 80, 160), squint=0.0,
+    ),
+
+    "surprised": EyeState(
+        upper_lid=1.0, lower_lid=0.0, pupil_size=0.92,
+        iris_color=(80, 150, 220), squint=0.0, eyebrow=0.8,
+    ),
+
+    "angry": EyeState(
+        upper_lid=0.65, lower_lid=0.30, pupil_size=0.25,
+        iris_color=(200, 60, 40), squint=0.50, eyebrow=-0.8,
+    ),
+
+    "confused": EyeState(
+        gaze_x=0.3, gaze_y=-0.2,
+        upper_lid=0.75, lower_lid=0.10, pupil_size=0.48,
+        iris_color=(100, 160, 80), squint=0.20,
+    ),
+
+    "suspicious": EyeState(
+        gaze_x=0.25, gaze_y=0.0,
+        upper_lid=0.55, lower_lid=0.25, pupil_size=0.30,
+        iris_color=(100, 100, 60), squint=0.55,
+    ),
+
+    "tired": EyeState(
+        gaze_x=0.0, gaze_y=0.2,
+        upper_lid=0.42, lower_lid=0.10, pupil_size=0.38,
+        iris_color=(60, 100, 160), squint=0.18,
+    ),
+
+    "sleeping": EyeState(
+        gaze_x=0.0, gaze_y=0.3,
+        upper_lid=0.02, lower_lid=0.65, pupil_size=0.20,
+        iris_color=(50, 80, 140), squint=0.0,
+    ),
+
+    "love": EyeState(
+        gaze_x=0.0, gaze_y=-0.1,
+        upper_lid=0.90, lower_lid=0.10, pupil_size=0.88,
+        iris_color=(220, 80, 120), squint=0.22,
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Behavior library
+# ---------------------------------------------------------------------------
+
+class BehaviorLibrary:
+
+    # -- BLINKS ---------------------------------------------------------------
 
     @staticmethod
-    def blink(speed: float = 1.0) -> Animation:
-        """Standard bilateral blink."""
+    def blink(speed=1.0) -> Animation:
         d = 0.07 / speed
         kf = [
-            Keyframe(_closed(),  duration=d,     easing=EasingType.EASE_IN),
-            Keyframe(_open(),    duration=d * 1.5, easing=EasingType.EASE_OUT),
+            Keyframe(_closed(),  d,       EasingType.EASE_IN),
+            Keyframe(_open(),    d * 1.5, EasingType.EASE_OUT),
         ]
-        return Animation("blink", left_keyframes=kf)
+        return Animation("blink", left_keyframes=kf, channels=CH_LIDS)
 
     @staticmethod
     def double_blink() -> Animation:
-        """Two quick blinks in succession."""
         d = 0.06
         kf = [
-            Keyframe(_closed(), duration=d,       easing=EasingType.EASE_IN),
-            Keyframe(_open(),   duration=d,       easing=EasingType.EASE_OUT, hold=0.08),
-            Keyframe(_closed(), duration=d,       easing=EasingType.EASE_IN),
-            Keyframe(_open(),   duration=d * 1.5, easing=EasingType.EASE_OUT),
+            Keyframe(_closed(), d,       EasingType.EASE_IN),
+            Keyframe(_open(),   d,       EasingType.EASE_OUT, hold=0.08),
+            Keyframe(_closed(), d,       EasingType.EASE_IN),
+            Keyframe(_open(),   d * 1.5, EasingType.EASE_OUT),
         ]
-        return Animation("double_blink", left_keyframes=kf)
+        return Animation("double_blink", left_keyframes=kf, channels=CH_LIDS)
 
     @staticmethod
     def slow_blink() -> Animation:
-        """Slow, sleepy blink."""
         kf = [
-            Keyframe(_closed(), duration=0.25, easing=EasingType.EASE_IN),
-            Keyframe(_open(),   duration=0.35, easing=EasingType.EASE_OUT),
+            Keyframe(_closed(), 0.25, EasingType.EASE_IN),
+            Keyframe(_open(),   0.35, EasingType.EASE_OUT),
         ]
-        return Animation("slow_blink", left_keyframes=kf)
+        return Animation("slow_blink", left_keyframes=kf, channels=CH_LIDS)
 
     @staticmethod
-    def wink(eye: str = "right") -> Animation:
-        """Wink one eye while keeping the other open."""
-        closed_state = _closed()
-        open_state = _open()
-
+    def wink(eye="right") -> Animation:
         wink_kf = [
-            Keyframe(closed_state, duration=0.08, easing=EasingType.EASE_IN),
-            Keyframe(open_state,   duration=0.15, easing=EasingType.EASE_OUT),
+            Keyframe(_closed(), 0.08, EasingType.EASE_IN),
+            Keyframe(_open(),   0.15, EasingType.EASE_OUT),
         ]
         hold_kf = [
-            Keyframe(open_state, duration=0.001),
-            Keyframe(open_state, duration=0.001),
+            Keyframe(_open(), 0.001),
+            Keyframe(_open(), 0.001),
         ]
-
         if eye == "right":
-            return Animation("wink_right", left_keyframes=hold_kf, right_keyframes=wink_kf)
-        else:
-            return Animation("wink_left", left_keyframes=wink_kf, right_keyframes=hold_kf)
+            return Animation("wink_right", left_keyframes=hold_kf, right_keyframes=wink_kf,
+                             channels=CH_LIDS)
+        return Animation("wink_left",  left_keyframes=wink_kf, right_keyframes=hold_kf,
+                         channels=CH_LIDS)
 
-    # -----------------------------------------------------------------------
-    # GAZE BEHAVIORS
-    # -----------------------------------------------------------------------
-
-    @staticmethod
-    def look_at(gaze_x: float, gaze_y: float, duration: float = 0.3) -> Animation:
-        """Move gaze to a specific direction."""
-        target = _open(gaze_x=gaze_x, gaze_y=gaze_y)
-        kf = [Keyframe(target, duration=duration, easing=EasingType.EASE_IN_OUT)]
-        return Animation("look_at", left_keyframes=kf)
+    # -- GAZE -----------------------------------------------------------------
+    # Gaze behaviors are transient glances: they control only the gaze channel
+    # (the active expression is preserved) and the engine eases back to the
+    # base gaze when they finish. For a persistent gaze use set_base_gaze().
 
     @staticmethod
-    def look_left(amount: float = 0.7) -> Animation:
-        return BehaviorLibrary.look_at(-amount, 0.0)
+    def look_at(gaze_x=0.0, gaze_y=0.0, duration=0.3, hold=0.0) -> Animation:
+        kf = [Keyframe(_open(gaze_x=gaze_x, gaze_y=gaze_y), duration,
+                       EasingType.EASE_IN_OUT, hold=hold)]
+        return Animation("look_at", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
-    def look_right(amount: float = 0.7) -> Animation:
-        return BehaviorLibrary.look_at(amount, 0.0)
+    def look_left(amount=0.7)  -> Animation: return BehaviorLibrary.look_at(-amount, 0.0, hold=0.6)
 
     @staticmethod
-    def look_up(amount: float = 0.6) -> Animation:
-        return BehaviorLibrary.look_at(0.0, -amount)
+    def look_right(amount=0.7) -> Animation: return BehaviorLibrary.look_at(amount,  0.0, hold=0.6)
 
     @staticmethod
-    def look_down(amount: float = 0.6) -> Animation:
-        return BehaviorLibrary.look_at(0.0, amount)
+    def look_up(amount=0.6)    -> Animation: return BehaviorLibrary.look_at(0.0, -amount, hold=0.6)
 
     @staticmethod
-    def look_center() -> Animation:
-        return BehaviorLibrary.look_at(0.0, 0.0)
+    def look_down(amount=0.6)  -> Animation: return BehaviorLibrary.look_at(0.0,  amount, hold=0.6)
+
+    @staticmethod
+    def look_center() -> Animation: return BehaviorLibrary.look_at(0.0, 0.0)
 
     @staticmethod
     def scan_horizontal() -> Animation:
-        """Scan left then right, return to center (like searching)."""
         kf = [
-            Keyframe(_open(gaze_x=-0.8),  duration=0.4, easing=EasingType.EASE_IN_OUT, hold=0.2),
-            Keyframe(_open(gaze_x=0.8),   duration=0.6, easing=EasingType.EASE_IN_OUT, hold=0.2),
-            Keyframe(_open(gaze_x=0.0),   duration=0.4, easing=EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_x=-0.8), 0.4, EasingType.EASE_IN_OUT, hold=0.2),
+            Keyframe(_open(gaze_x=0.8),  0.6, EasingType.EASE_IN_OUT, hold=0.2),
+            Keyframe(_open(),            0.4, EasingType.EASE_IN_OUT),
         ]
-        return Animation("scan_horizontal", left_keyframes=kf)
+        return Animation("scan_horizontal", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
-    def saccade(gaze_x: float, gaze_y: float) -> Animation:
-        """Fast saccadic eye movement (no easing, instant snap)."""
-        target = _open(gaze_x=gaze_x, gaze_y=gaze_y)
-        kf = [Keyframe(target, duration=0.04, easing=EasingType.LINEAR)]
-        return Animation("saccade", left_keyframes=kf)
+    def saccade(gaze_x=0.7, gaze_y=0.0) -> Animation:
+        kf = [Keyframe(_open(gaze_x=gaze_x, gaze_y=gaze_y), 0.04,
+                       EasingType.LINEAR, hold=0.3)]
+        return Animation("saccade", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
-    def track_face(gaze_x: float, gaze_y: float) -> Animation:
-        """
-        Smooth pursuit - used when following a detected face.
-        Very short duration so it feels responsive.
-        """
-        target = _open(gaze_x=gaze_x, gaze_y=gaze_y)
-        kf = [Keyframe(target, duration=0.12, easing=EasingType.EASE_OUT)]
-        return Animation("track_face", left_keyframes=kf)
+    def track_face(gaze_x=0.0, gaze_y=0.0) -> Animation:
+        kf = [Keyframe(_open(gaze_x=gaze_x, gaze_y=gaze_y), 0.12, EasingType.EASE_OUT)]
+        return Animation("track_face", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
     def look_away_shy() -> Animation:
-        """Look away shyly then back."""
         kf = [
-            Keyframe(_open(gaze_x=-0.6, gaze_y=0.3), duration=0.3, hold=0.8),
-            Keyframe(_open(gaze_x=0.0), duration=0.4, easing=EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_x=-0.6, gaze_y=0.3), 0.3, hold=0.8),
+            Keyframe(_open(), 0.4, EasingType.EASE_IN_OUT),
         ]
-        return Animation("look_away_shy", left_keyframes=kf)
-
-    # -----------------------------------------------------------------------
-    # EMOTIONAL EXPRESSIONS
-    # -----------------------------------------------------------------------
+        return Animation("look_away_shy", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
-    def happy() -> Animation:
-        """Happy expression: eyes slightly squinted, looking straight."""
-        happy_state = EyeState(
-            gaze_x=0.0, gaze_y=0.0,
-            upper_lid=0.85, lower_lid=0.25,
-            pupil_size=0.6,
-            iris_color=(80, 180, 120),
-            squint=0.3,
-        )
-        kf = [
-            Keyframe(happy_state, duration=0.2, easing=EasingType.EASE_OUT, hold=1.5),
-            Keyframe(_open(),     duration=0.3, easing=EasingType.EASE_IN_OUT),
-        ]
-        return Animation("happy", left_keyframes=kf)
+    def glance() -> Animation:
+        """Quick idle glance to a random nearby point, then back to base."""
+        gx = random.uniform(-0.55, 0.55)
+        gy = random.uniform(-0.30, 0.35)
+        kf = [Keyframe(_open(gaze_x=gx, gaze_y=gy), 0.16, EasingType.EASE_OUT,
+                       hold=random.uniform(0.4, 1.3))]
+        return Animation("glance", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
-    def sad() -> Animation:
-        """Sad expression: droopy eyelids, looking down."""
-        sad_state = EyeState(
-            gaze_x=0.0, gaze_y=0.4,
-            upper_lid=0.55, lower_lid=0.1,
-            pupil_size=0.35,
-            iris_color=(60, 80, 160),
-            squint=0.0,
-        )
+    def look_around() -> Animation:
+        """Casual two-point look around at idle."""
+        x1 = random.uniform(0.3, 0.6) * random.choice((-1, 1))
+        x2 = -x1 * random.uniform(0.4, 0.9)
         kf = [
-            Keyframe(sad_state, duration=0.5, easing=EasingType.EASE_IN, hold=2.0),
-            Keyframe(_open(),   duration=0.6, easing=EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_x=x1, gaze_y=random.uniform(-0.2, 0.2)), 0.25,
+                     EasingType.EASE_IN_OUT, hold=random.uniform(0.4, 0.9)),
+            Keyframe(_open(gaze_x=x2, gaze_y=random.uniform(-0.2, 0.2)), 0.30,
+                     EasingType.EASE_IN_OUT, hold=random.uniform(0.3, 0.8)),
         ]
-        return Animation("sad", left_keyframes=kf)
+        return Animation("look_around", left_keyframes=kf, channels=CH_GAZE)
+
+    # -- EMOTIONS (persistent: animate TO state and stay) --------------------
+
+    @staticmethod
+    def _emotion_anim(name, entry_dur=0.22, easing=EasingType.EASE_OUT,
+                      right_state=None) -> Animation:
+        """Helper: build a persistent emotion animation from EMOTION_STATES."""
+        st = EMOTION_STATES[name]
+        lkf = [Keyframe(st, entry_dur, easing)]
+        rkf = None
+        if right_state is not None:
+            rkf = [Keyframe(right_state, entry_dur, easing)]
+        return Animation("emotion_" + name, left_keyframes=lkf, right_keyframes=rkf)
+
+    @staticmethod
+    def neutral() -> Animation:
+        kf = [Keyframe(_open(), 0.35, EasingType.EASE_IN_OUT)]
+        return Animation("neutral", left_keyframes=kf)
+
+    @staticmethod
+    def happy()     -> Animation: return BehaviorLibrary._emotion_anim("happy",     0.20)
+
+    @staticmethod
+    def sad()       -> Animation: return BehaviorLibrary._emotion_anim("sad",       0.50, EasingType.EASE_IN)
 
     @staticmethod
     def surprised() -> Animation:
-        """Wide open eyes, pupils dilated."""
-        surprised_state = EyeState(
-            gaze_x=0.0, gaze_y=0.0,
-            upper_lid=1.0, lower_lid=0.0,
-            pupil_size=0.9,
-            iris_color=(80, 150, 220),
-            squint=0.0,
-        )
-        kf = [
-            Keyframe(surprised_state, duration=0.08, easing=EasingType.ELASTIC, hold=1.0),
-            Keyframe(_open(),         duration=0.5,  easing=EasingType.EASE_IN_OUT),
-        ]
-        return Animation("surprised", left_keyframes=kf)
+        kf = [Keyframe(EMOTION_STATES["surprised"], 0.08, EasingType.ELASTIC)]
+        return Animation("emotion_surprised", left_keyframes=kf)
 
     @staticmethod
-    def angry() -> Animation:
-        """Angry: inner brow down, squinting."""
-        angry_state = EyeState(
-            gaze_x=0.0, gaze_y=0.0,
-            upper_lid=0.65, lower_lid=0.3,
-            pupil_size=0.25,
-            iris_color=(200, 60, 40),
-            squint=0.5,
-            eyebrow=-0.8,
+    def angry()     -> Animation: return BehaviorLibrary._emotion_anim("angry",     0.15, EasingType.EASE_IN)
+
+    @staticmethod
+    def confused()  -> Animation:
+        # Left and right eyes differ slightly for the confused asymmetry
+        lkf = [Keyframe(EMOTION_STATES["confused"], 0.25)]
+        rkf_st = EyeState(
+            gaze_x=0.3, gaze_y=-0.2,
+            upper_lid=0.60, lower_lid=0.15, pupil_size=0.50,
+            iris_color=(100, 160, 80), squint=0.40,
         )
-        kf = [
-            Keyframe(angry_state, duration=0.15, easing=EasingType.EASE_IN, hold=1.5),
-            Keyframe(_open(),     duration=0.4,  easing=EasingType.EASE_IN_OUT),
-        ]
-        return Animation("angry", left_keyframes=kf)
+        rkf = [Keyframe(rkf_st, 0.25)]
+        return Animation("emotion_confused", left_keyframes=lkf, right_keyframes=rkf)
 
     @staticmethod
     def suspicious() -> Animation:
-        """One eye squinted, head tilted look."""
-        suspicious_l = EyeState(
-            gaze_x=0.2, gaze_y=0.0,
-            upper_lid=0.5, lower_lid=0.3,
-            pupil_size=0.3,
-            iris_color=(100, 100, 60),
-            squint=0.6,
+        lkf = [Keyframe(EMOTION_STATES["suspicious"], 0.20)]
+        rkf_st = EyeState(
+            gaze_x=0.25, gaze_y=0.0,
+            upper_lid=0.88, lower_lid=0.0, pupil_size=0.46,
+            iris_color=(100, 100, 60), squint=0.08,
         )
-        suspicious_r = EyeState(
-            gaze_x=0.2, gaze_y=0.0,
-            upper_lid=0.85, lower_lid=0.0,
-            pupil_size=0.45,
-            iris_color=(100, 100, 60),
-            squint=0.1,
-        )
-        lkf = [
-            Keyframe(suspicious_l, duration=0.2, hold=1.5),
-            Keyframe(_open(),      duration=0.3),
-        ]
-        rkf = [
-            Keyframe(suspicious_r, duration=0.2, hold=1.5),
-            Keyframe(_open(),      duration=0.3),
-        ]
-        return Animation("suspicious", left_keyframes=lkf, right_keyframes=rkf)
+        rkf = [Keyframe(rkf_st, 0.20)]
+        return Animation("emotion_suspicious", left_keyframes=lkf, right_keyframes=rkf)
 
     @staticmethod
-    def tired() -> Animation:
-        """Sleepy drooping eyelids."""
-        tired_state = EyeState(
-            gaze_x=0.0, gaze_y=0.2,
-            upper_lid=0.45, lower_lid=0.1,
-            pupil_size=0.4,
-            iris_color=(60, 100, 160),
-            squint=0.15,
-        )
-        kf = [
-            Keyframe(tired_state, duration=1.0, easing=EasingType.EASE_IN, hold=2.0),
-            Keyframe(_open(),     duration=0.8, easing=EasingType.EASE_OUT),
-        ]
-        return Animation("tired", left_keyframes=kf)
+    def tired()     -> Animation: return BehaviorLibrary._emotion_anim("tired",     0.80, EasingType.EASE_IN)
 
     @staticmethod
-    def love() -> Animation:
-        """Heart eyes effect (approximated with dilated pupils + warm color)."""
-        love_state = EyeState(
-            gaze_x=0.0, gaze_y=-0.1,
-            upper_lid=0.9, lower_lid=0.1,
-            pupil_size=0.85,
-            iris_color=(220, 80, 120),
-            squint=0.2,
-        )
-        kf = [
-            Keyframe(love_state, duration=0.3, easing=EasingType.BOUNCE, hold=2.0),
-            Keyframe(_open(),    duration=0.5, easing=EasingType.EASE_IN_OUT),
-        ]
-        return Animation("love", left_keyframes=kf)
+    def love()      -> Animation:
+        kf = [Keyframe(EMOTION_STATES["love"], 0.30, EasingType.BOUNCE)]
+        return Animation("emotion_love", left_keyframes=kf)
 
-    @staticmethod
-    def confused() -> Animation:
-        """One eye open, one squinted, with a sideways glance."""
-        conf_l = EyeState(
-            gaze_x=0.3, gaze_y=-0.2,
-            upper_lid=0.9, lower_lid=0.0,
-            pupil_size=0.5,
-            iris_color=(100, 160, 80),
-            squint=0.0,
-        )
-        conf_r = EyeState(
-            gaze_x=0.3, gaze_y=-0.2,
-            upper_lid=0.6, lower_lid=0.15,
-            pupil_size=0.5,
-            iris_color=(100, 160, 80),
-            squint=0.4,
-        )
-        lkf = [
-            Keyframe(conf_l, duration=0.25, hold=1.5),
-            Keyframe(_open(), duration=0.3),
-        ]
-        rkf = [
-            Keyframe(conf_r, duration=0.25, hold=1.5),
-            Keyframe(_open(), duration=0.3),
-        ]
-        return Animation("confused", left_keyframes=lkf, right_keyframes=rkf)
-
-    # -----------------------------------------------------------------------
-    # SLEEP / WAKE
-    # -----------------------------------------------------------------------
+    # -- SLEEP / WAKE --------------------------------------------------------
 
     @staticmethod
     def fall_asleep() -> Animation:
-        """Gradually close eyes as if falling asleep."""
         kf = [
-            Keyframe(HALF_CLOSED, duration=1.5, easing=EasingType.EASE_IN, hold=0.5),
-            Keyframe(_closed(),   duration=1.0, easing=EasingType.EASE_IN),
+            Keyframe(HALF_CLOSED,              1.5, EasingType.EASE_IN, hold=0.5),
+            Keyframe(EMOTION_STATES["sleeping"], 1.0, EasingType.EASE_IN),
         ]
         return Animation("fall_asleep", left_keyframes=kf)
 
     @staticmethod
     def wake_up() -> Animation:
-        """Wake up from sleep."""
         kf = [
-            Keyframe(HALF_CLOSED, duration=0.8, easing=EasingType.EASE_OUT, hold=0.3),
-            Keyframe(_open(),     duration=0.6, easing=EasingType.ELASTIC),
+            Keyframe(HALF_CLOSED, 0.8, EasingType.EASE_OUT, hold=0.3),
+            Keyframe(_open(),     0.6, EasingType.ELASTIC),
         ]
         return Animation("wake_up", left_keyframes=kf)
 
     @staticmethod
     def sleeping_loop() -> Animation:
-        """Looping slow breathing while asleep (subtle lid movement)."""
-        asleep = EyeState(
+        sl1 = EMOTION_STATES["sleeping"]
+        sl2 = EyeState(
             gaze_x=0.0, gaze_y=0.3,
-            upper_lid=0.05, lower_lid=0.6,
-            pupil_size=0.2,
-            iris_color=(50, 80, 140),
-        )
-        asleep2 = EyeState(
-            gaze_x=0.0, gaze_y=0.3,
-            upper_lid=0.0, lower_lid=0.7,
-            pupil_size=0.2,
+            upper_lid=0.0, lower_lid=0.70, pupil_size=0.20,
             iris_color=(50, 80, 140),
         )
         kf = [
-            Keyframe(asleep,  duration=1.8, easing=EasingType.EASE_IN_OUT),
-            Keyframe(asleep2, duration=2.2, easing=EasingType.EASE_IN_OUT),
+            Keyframe(sl1, 1.8, EasingType.EASE_IN_OUT),
+            Keyframe(sl2, 2.2, EasingType.EASE_IN_OUT),
         ]
         return Animation("sleeping_loop", left_keyframes=kf, loop=True)
 
-    # -----------------------------------------------------------------------
-    # ATTENTION / INTERACTION
-    # -----------------------------------------------------------------------
+    # -- ATTENTION / MISC ----------------------------------------------------
 
     @staticmethod
-    def notice(gaze_x: float = 0.5, gaze_y: float = 0.0) -> Animation:
-        """Quick look toward something that caught attention."""
-        target = _open(gaze_x=gaze_x, gaze_y=gaze_y, pupil=0.7)
+    def notice(gaze_x=0.5, gaze_y=0.0) -> Animation:
         kf = [
-            Keyframe(target,  duration=0.08, easing=EasingType.LINEAR, hold=0.4),
-            Keyframe(_open(), duration=0.3,  easing=EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_x=gaze_x, gaze_y=gaze_y, pupil=0.7),
+                     0.08, EasingType.LINEAR, hold=0.4),
+            Keyframe(_open(), 0.3, EasingType.EASE_IN_OUT),
         ]
-        return Animation("notice", left_keyframes=kf)
+        return Animation("notice", left_keyframes=kf, channels=CH_GAZE_PUPIL)
 
     @staticmethod
     def thinking() -> Animation:
-        """Eyes moving as if thinking (upper-right is associated with imagination)."""
-        think = _open(gaze_x=0.5, gaze_y=-0.4)
         kf = [
-            Keyframe(think,                      duration=0.25, hold=0.8),
-            Keyframe(_open(gaze_x=0.2, gaze_y=-0.3), duration=0.3, hold=0.4),
-            Keyframe(_open(),                    duration=0.4),
+            Keyframe(_open(gaze_x=0.5, gaze_y=-0.4), 0.25, hold=0.8),
+            Keyframe(_open(gaze_x=0.2, gaze_y=-0.3), 0.3,  hold=0.4),
+            Keyframe(_open(), 0.4),
         ]
-        return Animation("thinking", left_keyframes=kf)
+        return Animation("thinking", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
     def dizzy() -> Animation:
-        """Eyes spinning slightly (confused/dizzy)."""
-        kf = [
-            Keyframe(_open(gaze_x=0.8,  gaze_y=0.0),  duration=0.15),
-            Keyframe(_open(gaze_x=0.0,  gaze_y=-0.8), duration=0.15),
-            Keyframe(_open(gaze_x=-0.8, gaze_y=0.0),  duration=0.15),
-            Keyframe(_open(gaze_x=0.0,  gaze_y=0.8),  duration=0.15),
-            Keyframe(_open(gaze_x=0.8,  gaze_y=0.0),  duration=0.15),
-            Keyframe(_open(gaze_x=0.0,  gaze_y=-0.8), duration=0.15),
-            Keyframe(_open(gaze_x=-0.8, gaze_y=0.0),  duration=0.15),
-            Keyframe(_open(gaze_x=0.0,  gaze_y=0.0),  duration=0.3, easing=EasingType.EASE_OUT),
-        ]
-        return Animation("dizzy", left_keyframes=kf)
+        pts = [(0.8, 0.0), (0.0, -0.8), (-0.8, 0.0),
+               (0.0, 0.8), (0.8, 0.0), (0.0, -0.8), (-0.8, 0.0)]
+        kf  = [Keyframe(_open(gaze_x=x, gaze_y=y), 0.15) for x, y in pts]
+        kf += [Keyframe(_open(), 0.3, EasingType.EASE_OUT)]
+        return Animation("dizzy", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
     def roll_eyes() -> Animation:
-        """Roll eyes (up and around)."""
-        kf = [
-            Keyframe(_open(gaze_x=0.0, gaze_y=-0.8),  duration=0.2),
-            Keyframe(_open(gaze_x=0.8, gaze_y=-0.4),  duration=0.2),
-            Keyframe(_open(gaze_x=0.8, gaze_y=0.4),   duration=0.2),
-            Keyframe(_open(gaze_x=0.0, gaze_y=0.6),   duration=0.2),
-            Keyframe(_open(gaze_x=-0.8, gaze_y=0.0),  duration=0.2),
-            Keyframe(_open(gaze_x=0.0, gaze_y=0.0),   duration=0.3),
-        ]
-        return Animation("roll_eyes", left_keyframes=kf)
+        pts = [(0.0, -0.8), (0.8, -0.4), (0.8, 0.4),
+               (0.0, 0.6), (-0.8, 0.0), (0.0, 0.0)]
+        kf  = [Keyframe(_open(gaze_x=x, gaze_y=y), 0.2) for x, y in pts]
+        return Animation("roll_eyes", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
-    def pupil_dilate(amount: float = 1.0) -> Animation:
-        """Dilate pupils (excitement, low light)."""
-        dilated = _open(pupil=amount)
+    def pupil_dilate(amount=1.0) -> Animation:
         kf = [
-            Keyframe(dilated, duration=0.3, easing=EasingType.EASE_OUT, hold=1.0),
-            Keyframe(_open(), duration=0.5, easing=EasingType.EASE_IN_OUT),
+            Keyframe(_open(pupil=amount), 0.3, EasingType.EASE_OUT, hold=1.0),
+            Keyframe(_open(), 0.5, EasingType.EASE_IN_OUT),
         ]
-        return Animation("pupil_dilate", left_keyframes=kf)
+        return Animation("pupil_dilate", left_keyframes=kf, channels=CH_PUPIL)
 
     @staticmethod
     def random_behavior() -> Animation:
-        """Pick a random idle behavior."""
-        behaviors = [
-            BehaviorLibrary.blink,
-            BehaviorLibrary.slow_blink,
-            BehaviorLibrary.look_left,
-            BehaviorLibrary.look_right,
-            BehaviorLibrary.look_up,
-            BehaviorLibrary.look_down,
-            BehaviorLibrary.thinking,
-            BehaviorLibrary.look_away_shy,
+        """
+        Idle movement: mostly small glances, occasionally a longer look.
+        Blinking is NOT included here -- the engine auto-blinks on its own.
+        """
+        choices = [
+            (BehaviorLibrary.glance,        5),
+            (BehaviorLibrary.look_around,   2),
+            (BehaviorLibrary.thinking,      1),
+            (BehaviorLibrary.look_away_shy, 1),
         ]
-        return random.choice(behaviors)()
+        factories, weights = zip(*choices)
+        return random.choices(factories, weights=weights)[0]()
 
 
 # ---------------------------------------------------------------------------
-# Public behavior map (name -> factory callable)
+# Public maps
 # ---------------------------------------------------------------------------
+
 BEHAVIOR_MAP = {
-    "blink":          BehaviorLibrary.blink,
-    "double_blink":   BehaviorLibrary.double_blink,
-    "slow_blink":     BehaviorLibrary.slow_blink,
-    "wink_right":     lambda: BehaviorLibrary.wink("right"),
-    "wink_left":      lambda: BehaviorLibrary.wink("left"),
-    "look_left":      BehaviorLibrary.look_left,
-    "look_right":     BehaviorLibrary.look_right,
-    "look_up":        BehaviorLibrary.look_up,
-    "look_down":      BehaviorLibrary.look_down,
-    "look_center":    BehaviorLibrary.look_center,
-    "scan":           BehaviorLibrary.scan_horizontal,
-    "thinking":       BehaviorLibrary.thinking,
-    "roll_eyes":      BehaviorLibrary.roll_eyes,
-    "dizzy":          BehaviorLibrary.dizzy,
-    "look_away":      BehaviorLibrary.look_away_shy,
-    "happy":          BehaviorLibrary.happy,
-    "sad":            BehaviorLibrary.sad,
-    "surprised":      BehaviorLibrary.surprised,
-    "angry":          BehaviorLibrary.angry,
-    "suspicious":     BehaviorLibrary.suspicious,
-    "tired":          BehaviorLibrary.tired,
-    "love":           BehaviorLibrary.love,
-    "confused":       BehaviorLibrary.confused,
-    "fall_asleep":    BehaviorLibrary.fall_asleep,
-    "wake_up":        BehaviorLibrary.wake_up,
-    "sleeping":       BehaviorLibrary.sleeping_loop,
-    "dilate":         BehaviorLibrary.pupil_dilate,
-    "notice":         BehaviorLibrary.notice,
-    "random":         BehaviorLibrary.random_behavior,
-    "saccade_right":  lambda: BehaviorLibrary.saccade(0.7, 0.0),
-    "saccade_left":   lambda: BehaviorLibrary.saccade(-0.7, 0.0),
+    "blink":         BehaviorLibrary.blink,
+    "double_blink":  BehaviorLibrary.double_blink,
+    "slow_blink":    BehaviorLibrary.slow_blink,
+    "wink_right":    lambda: BehaviorLibrary.wink("right"),
+    "wink_left":     lambda: BehaviorLibrary.wink("left"),
+    "look_left":     BehaviorLibrary.look_left,
+    "look_right":    BehaviorLibrary.look_right,
+    "look_up":       BehaviorLibrary.look_up,
+    "look_down":     BehaviorLibrary.look_down,
+    "look_center":   BehaviorLibrary.look_center,
+    "glance":        BehaviorLibrary.glance,
+    "look_around":   BehaviorLibrary.look_around,
+    "scan":          BehaviorLibrary.scan_horizontal,
+    "thinking":      BehaviorLibrary.thinking,
+    "roll_eyes":     BehaviorLibrary.roll_eyes,
+    "dizzy":         BehaviorLibrary.dizzy,
+    "look_away":     BehaviorLibrary.look_away_shy,
+    "neutral":       BehaviorLibrary.neutral,
+    "happy":         BehaviorLibrary.happy,
+    "sad":           BehaviorLibrary.sad,
+    "surprised":     BehaviorLibrary.surprised,
+    "angry":         BehaviorLibrary.angry,
+    "suspicious":    BehaviorLibrary.suspicious,
+    "tired":         BehaviorLibrary.tired,
+    "love":          BehaviorLibrary.love,
+    "confused":      BehaviorLibrary.confused,
+    "fall_asleep":   BehaviorLibrary.fall_asleep,
+    "wake_up":       BehaviorLibrary.wake_up,
+    "sleeping":      BehaviorLibrary.sleeping_loop,
+    "dilate":        BehaviorLibrary.pupil_dilate,
+    "notice":        BehaviorLibrary.notice,
+    "random":        BehaviorLibrary.random_behavior,
+    "saccade_right": lambda: BehaviorLibrary.saccade(0.7,  0.0),
+    "saccade_left":  lambda: BehaviorLibrary.saccade(-0.7, 0.0),
 }

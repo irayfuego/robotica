@@ -1,0 +1,326 @@
+# =============================================================================
+# CALIBRACION.yaml
+# Fichero único de parámetros físicos del robot que DEBES medir y configurar.
+#
+# Una vez completado, copia cada valor al fichero indicado en "→ va a:".
+# Los valores aquí son estimaciones iniciales — el robot funcionará pero la
+# odometría y la navegación no serán precisas hasta que los midas.
+# =============================================================================
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 1 — GEOMETRÍA DEL CHASIS MECANUM
+# Fichero: robotica_ws/src/rrc_lite_ros2/config/rrc_lite_params.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+geometria_chasis:
+
+  wheelbase:
+    valor_actual: 0.148        # metros (estimación)
+    unidades: metros
+    descripcion: >
+      Distancia entre el eje de la rueda delantera y el eje de la trasera,
+      medida de centro a centro.
+    como_medirlo: >
+      Con el robot en una superficie plana, mide con una regla desde el centro
+      del eje del motor delantero izquierdo hasta el centro del eje del motor
+      trasero izquierdo. Repite por el lado derecho y promedia.
+    ejemplo_medicion: "148 mm → 0.148 m"
+    # → va a: rrc_lite_params.yaml → wheelbase
+
+  track_width:
+    valor_actual: 0.140        # metros (estimación)
+    unidades: metros
+    descripcion: >
+      Distancia entre el centro de la rueda izquierda y el centro de la rueda
+      derecha (en el mismo eje).
+    como_medirlo: >
+      Mide de centro a centro de las ruedas delanteras (o traseras, deben ser
+      iguales). Incluye el ancho de las ruedas si el centro del neumático no
+      coincide con el centro del chasis.
+    ejemplo_medicion: "140 mm → 0.140 m"
+    # → va a: rrc_lite_params.yaml → track_width
+
+  wheel_radius:
+    valor_actual: 0.033        # metros (estimación — ruedas Mecanum 65 mm Ø)
+    unidades: metros
+    descripcion: >
+      Radio exterior de las ruedas Mecanum (no el radio del hub, sino el radio
+      total incluyendo los rodillos).
+    como_medirlo: >
+      Opción A (directa): Mide el diámetro total de la rueda con un calibre y
+      divide entre 2. Ruedas de 65 mm → 32.5 mm → 0.0325 m.
+      Opción B (rodando): Marca una línea en el suelo, coloca el robot encima
+      con una rueda alineada, mueve el robot exactamente 1 vuelta de rueda
+      (girando a mano) y mide la distancia recorrida. radio = distancia / (2π).
+    ejemplo_medicion: "65 mm de diámetro → radio = 32.5 mm → 0.0325 m"
+    # → va a: rrc_lite_params.yaml → wheel_radius
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 2 — ENCODERS DE LOS MOTORES
+# (La placa STM32 gestiona los encoders internamente y expone velocidad en RPS.
+#  No necesitas configurar CPR en ROS 2, pero estos datos son útiles para
+#  verificar la calibración de odometría.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+encoders:
+  tipo: "Hall magnético"
+  ppr_encoder: 12              # Pulsos Por Revolución del encoder (dato del fabricante)
+  relacion_reduccion: 90       # Relación de la caja reductora (dato del fabricante)
+  ppr_efectivo: 1080           # = ppr_encoder × relacion_reduccion = 12 × 90
+  ppr_cuadratura: 4320         # = ppr_efectivo × 4 (si el STM32 usa cuadratura)
+  nota: >
+    La placa STM32 (RRC Lite / Huaner) controla los motores y encoders internamente.
+    Envía velocidad en RPS (revoluciones por segundo) al nodo ROS vía protocolo serie.
+    No hay que leer ticks directamente desde ROS 2.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 3 — GIMBAL (plataforma 9IMOD Mini + 2 servos PWM)
+# Fichero: robotica_ws/src/rrc_lite_ros2/config/rrc_lite_params.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+gimbal:
+
+  pan_center:
+    valor_actual: 1500         # microsegundos
+    unidades: microsegundos
+    descripcion: >
+      Señal PWM (en µs) para que el servo de PAN (horizontal) quede centrado.
+      Los servos estándar van de 500 µs (izquierda) a 2500 µs (derecha),
+      con 1500 µs como posición neutra.
+    como_medirlo: >
+      1. Conecta el servo a la placa y arranca el robot.
+      2. Envía: ros2 topic pub /gimbal/cmd geometry_msgs/Vector3 "{x: 0.0, y: 0.0, z: 0.0}"
+      3. Observa si la cámara apunta recto al frente.
+      4. Si no, ajusta pan_center en pasos de 50 µs hasta que quede centrado.
+    rango: "500 a 2500 µs (centro típico 1500)"
+    # → va a: rrc_lite_params.yaml → pan_center
+
+  tilt_center:
+    valor_actual: 1500         # microsegundos
+    descripcion: >
+      Señal PWM para que el servo de TILT (vertical) quede horizontal.
+    como_medirlo: >
+      Igual que pan_center pero para el servo vertical. La cámara debe quedar
+      paralela al suelo. Ajusta hasta que así sea.
+    rango: "500 a 2500 µs (horizontal típico 1500, puede variar con el montaje)"
+    # → va a: rrc_lite_params.yaml → tilt_center
+
+  pan_range:
+    valor_actual: 500          # microsegundos
+    descripcion: >
+      Rango máximo de movimiento del pan desde el centro.
+      Con pan_center=1500 y pan_range=500: el servo va de 1000 a 2000 µs.
+    como_medirlo: >
+      Mueve manualmente el servo hasta el límite mecánico de la plataforma.
+      El rango en µs = (posición_límite - pan_center). Ponlo un poco menor
+      que el límite mecánico para no forzar el servo.
+    # → va a: rrc_lite_params.yaml → pan_range
+
+  tilt_range:
+    valor_actual: 350          # microsegundos
+    descripcion: >
+      Rango máximo del tilt. Más pequeño que el pan porque la plataforma
+      9IMOD tiene menos recorrido vertical.
+    # → va a: rrc_lite_params.yaml → tilt_range
+
+  gimbal_pan_id:
+    valor_actual: 1
+    descripcion: >
+      Número del conector PWM en la placa RRC Lite al que está enchufado
+      el servo de PAN. Los conectores están numerados del 1 al 4 en la placa.
+    como_determinarlo: >
+      Mira físicamente cuál conector PWM de la placa usaste para el servo pan.
+      En la placa Huaner/RRC Lite los conectores PWM están etiquetados S1-S4.
+    # → va a: rrc_lite_params.yaml → gimbal_pan_id
+
+  gimbal_tilt_id:
+    valor_actual: 2
+    descripcion: "Igual que pan pero para el servo de TILT."
+    # → va a: rrc_lite_params.yaml → gimbal_tilt_id
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 4 — EKF (Extended Kalman Filter)
+# Fichero: robotica_ws/src/robotica_bringup/config/ekf.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+ekf:
+
+  calibration_factor_linear:
+    valor_actual: 1.00
+    descripcion: >
+      Factor de corrección de la odometría lineal. Si el robot se desplaza
+      1 metro real pero ROS reporta X metros, el factor = 1.0 / X.
+    como_medirlo: >
+      1. Coloca el robot en un punto marcado en el suelo.
+      2. Envía: ros2 topic pub /cmd_vel geometry_msgs/Twist "{linear: {x: 0.2}}" durante 5 s.
+      3. Mide la distancia real recorrida con una cinta.
+      4. Compara con: ros2 topic echo /odom (campo pose.pose.position.x).
+      5. factor = distancia_real / distancia_odom
+    ejemplo: "Robot avanza 1.00 m real pero odom dice 0.95 m → factor = 1.00 / 0.95 = 1.053"
+    # → va a: ekf.yaml (o al parámetro linear_correction_factor del controlador)
+
+  calibration_factor_angular:
+    valor_actual: 1.00
+    descripcion: >
+      Factor de corrección de la odometría angular. Si el robot gira 360°
+      reales pero ROS reporta X rad, el factor = 2π / X.
+    como_medirlo: >
+      1. Coloca el robot en un punto marcado con una cinta en el suelo.
+      2. Envía: ros2 topic pub /cmd_vel geometry_msgs/Twist "{angular: {z: 0.5}}" durante ~12 s
+         (para dar una vuelta completa a ~0.5 rad/s).
+      3. Mide el ángulo real girado (debería ser 360°).
+      4. Compara con: ros2 topic echo /odom (campo pose.pose.orientation).
+      5. factor = angulo_real_rad / angulo_odom_rad
+    # → va a: ekf.yaml (proceso de calibración)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 5 — LIDAR D6 (LD06)
+# Fichero: robotica_ws/src/robotica_bringup/config/laser_filter.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+lidar:
+
+  angle_min_filter:
+    valor_actual: -3.14159     # radianes (-180°)
+    descripcion: >
+      Ángulo mínimo del scan que se CONSERVA después del filtrado.
+      Los ángulos que cubren el chasis, cables o estructura del robot
+      deben EXCLUIRSE para que no confundan al SLAM.
+    como_medirlo: >
+      1. Arranca el LIDAR: ros2 launch ldlidar_stl_ros2 ld06.launch.py
+      2. Abre rviz2 y añade el topic /scan (LaserScan).
+      3. Rota el robot lentamente y observa qué arcos del scan corresponden
+         al propio robot (puntos que siempre están fijos).
+      4. Anota el rango angular a excluir (p.ej. -0.5 a 0.5 rad = ±28°).
+      5. Ajusta angle_min/max en laser_filter.yaml para excluir esa zona.
+    nota: >
+      Si el LIDAR está centrado y el robot es simétrico, normalmente se
+      excluye un pequeño arco trasero donde van los cables y la batería.
+    # → va a: laser_filter.yaml → angle_min / angle_max
+
+  lidar_frame_offset_x:
+    valor_actual: 0.08         # metros (estimación)
+    descripcion: >
+      Posición X del LIDAR respecto al centro del robot (base_link).
+      Positivo = adelante, negativo = atrás.
+    como_medirlo: >
+      Mide con regla desde el centro geométrico del chasis hasta el centro
+      del rotor del LIDAR, en el eje frontal/trasero del robot.
+    # → va a: robotica_description/urdf/robot.urdf.xacro → lidar_joint origin xyz
+
+  lidar_frame_offset_z:
+    valor_actual: 0.04         # metros
+    descripcion: "Altura del LIDAR sobre la base del robot (base_link)."
+    como_medirlo: >
+      Mide desde el plano de base_link (suelo + altura de ruedas) hasta
+      el plano de escaneo del LIDAR.
+    # → va a: robot.urdf.xacro → lidar_joint origin xyz (componente z)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 6 — HUSKYLENS 2
+# Fichero: robotica_ws/src/huskylens2_ros2/config/huskylens_params.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+huskylens:
+
+  i2c_address:
+    valor_actual: "0x32"
+    descripcion: >
+      Dirección I2C de la cámara. La dirección por defecto es 0x32.
+      Se puede cambiar en el menú de la cámara si tienes varios dispositivos I2C.
+    como_verificarlo: >
+      En la Pi: sudo i2cdetect -y 1
+      Deberías ver "32" en la tabla (fila 3, columna 2).
+    # → va a: huskylens_params.yaml → i2c_address
+
+  mcp_server_ip:
+    valor_actual: "192.168.X.X"   # RELLENAR cuando tengas el robot conectado al WiFi
+    descripcion: >
+      IP que asigna tu router a la HuskyLens 2 cuando se conecta al WiFi.
+      Se usa para conectar Claude Desktop al servidor MCP integrado del dispositivo.
+    como_obtenerla: >
+      1. En la HuskyLens 2: Settings → WiFi → conectar a tu red doméstica.
+      2. La pantalla mostrará la IP asignada (o mírala en tu router).
+      3. Anótala aquí. Si tu router la cambia, configura IP fija en el router
+         por MAC address de la HuskyLens.
+    uso: >
+      Añadir en Claude Desktop (claude_desktop_config.json):
+        "mcpServers": {
+          "huskylens": {
+            "url": "http://<ESTA_IP>/mcp"
+          }
+        }
+    # No va a ningún fichero ROS — es solo para la configuración de Claude Desktop
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECCIÓN 7 — NAV2 (velocidades y aceleraciones del robot)
+# Fichero: robotica_ws/src/robotica_bringup/config/nav2_params.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+navegacion:
+
+  max_vel_x:
+    valor_actual: 0.5          # m/s
+    descripcion: "Velocidad lineal máxima que Nav2 puede ordenar al robot."
+    como_determinarlo: >
+      Arranca el robot a velocidades crecientes con:
+        ros2 topic pub /cmd_vel geometry_msgs/Twist "{linear: {x: X.X}}"
+      hasta encontrar la velocidad máxima segura (sin patinar ni perder control).
+      Pon ese valor como max_vel_x. Para navegación en interiores, 0.3-0.5 m/s
+      es razonable con este chasis.
+    # → va a: nav2_params.yaml → FollowPath.max_vel_x
+
+  max_vel_theta:
+    valor_actual: 1.5          # rad/s
+    descripcion: "Velocidad angular máxima para Nav2."
+    como_determinarlo: >
+      Similar a max_vel_x. Gira el robot a velocidades crecientes.
+      Para giro en sitio, 1.0-2.0 rad/s es típico.
+    # → va a: nav2_params.yaml → FollowPath.max_vel_theta
+
+  robot_radius:
+    valor_actual: 0.15         # metros
+    descripcion: >
+      Radio del círculo que rodea al robot (inflación del costmap).
+      Debe ser mayor que la mitad de la diagonal del chasis para garantizar
+      que Nav2 no choca con obstáculos.
+    como_medirlo: >
+      Mide la diagonal del chasis (de esquina a esquina) y divide entre 2.
+      Añade 2-3 cm de margen.
+      Chasis de ~300mm × 220mm → diagonal ≈ 373 mm → radio ≈ 187 mm → 0.19 m
+    # → va a: nav2_params.yaml → robot_radius (costmap inflation)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESUMEN — ORDEN DE CALIBRACIÓN RECOMENDADO
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# FASE 1 — Antes de encender (con cinta métrica):
+#   1. wheelbase          → rrc_lite_params.yaml
+#   2. track_width        → rrc_lite_params.yaml
+#   3. wheel_radius       → rrc_lite_params.yaml
+#   4. lidar_frame offsets→ robot.urdf.xacro
+#   5. robot_radius       → nav2_params.yaml
+#
+# FASE 2 — Con el robot encendido, sin ROS completo:
+#   6. pan_center / tilt_center  → rrc_lite_params.yaml (mover gimbal a centro)
+#   7. pan_range / tilt_range    → rrc_lite_params.yaml (probar límites)
+#   8. gimbal_pan_id / tilt_id   → rrc_lite_params.yaml (confirmar qué servo es cuál)
+#   9. i2c_address HuskyLens     → i2cdetect -y 1
+#
+# FASE 3 — Con ROS completo funcionando:
+#  10. angle_min/max laser filter → mover robot, ver en rviz2 qué excluir
+#  11. calibration_factor_linear  → medir 1 metro real vs odom
+#  12. calibration_factor_angular → medir 1 vuelta real vs odom
+#
+# FASE 4 — Con WiFi configurado en la HuskyLens 2:
+#  13. mcp_server_ip              → para Claude Desktop
+#
+# =============================================================================

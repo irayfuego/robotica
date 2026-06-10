@@ -120,7 +120,7 @@ struct node_lidar_t
   Lidar_Data_Processing lidar_data_processing;
   //Serial_Port *serial_port;
   std::shared_ptr<Serial_Port> serial_port;
-  Event _dataEvent;
+  Event _dataEvent{true};  // auto-reset: one wait per scan
   Locker _lock;
 
   ~node_lidar_t();

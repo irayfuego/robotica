@@ -1,6 +1,6 @@
 ### nav2_params.yaml — Configuración Nav2 para robot Mecanum
 # Robot: ~30×30 cm, ruedas Mecanum, max 0.5 m/s lineal
-# LIDAR: LD19 en base del robot, scan topic: /scan_filtered
+# LIDAR: LD19 en base del robot, scan topic: /scan
 # Odometría fusionada: /odom (EKF)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: /scan_filtered
+          topic: /scan
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -228,7 +228,7 @@ global_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan_filtered
+          topic: /scan
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -301,7 +301,7 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: /scan_filtered
+    scan_topic: /scan
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Velocity Smoother
@@ -391,7 +391,7 @@ collision_monitor:
       enabled: true
     scan:
       type: scan
-      topic: /scan_filtered
+      topic: /scan
 
 opennav_docking:
   ros__parameters:

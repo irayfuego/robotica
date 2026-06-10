@@ -18,7 +18,7 @@ slam_toolbox:
     odom_frame:      odom
     map_frame:       map
     base_frame:      base_footprint
-    scan_topic:      /scan_filtered    # salida del laser_filter_node
+    scan_topic:      /scan    # salida del laser_filter_node
     use_map_saver:   false
     mode:            mapping           # mapping | localization
 

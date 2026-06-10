@@ -30,13 +30,15 @@ robot_eyes_node:
       bl_pin:     18
       spi_speed:  40000000   # 40 MHz
 
-huskylens_bridge_node:
+huskylens_gaze_bridge:
   ros__parameters:
-    interface:    'uart'        # 'uart' | 'i2c'
-    port:         '/dev/serial0'
-    baudrate:     9600
-    mode:         6             # 6 = EMOTION_RECOGNITION
-    rate:         20.0          # Hz de lectura
-    lost_timeout: 1.5           # s sin detección → idle
-    confidence:   60            # 0-100 confianza mínima
-    emotion_hold: 0.8           # s que debe mantenerse la emoción
+    i2c_bus:    1          # I2C bus (SDA=GPIO2, SCL=GPIO3)
+    hz:         20         # Hz de polling
+    hl_width:   640        # Resolucion horizontal HuskyLens 2
+    hl_height:  480        # Resolucion vertical HuskyLens 2
+
+    # --- Modo de operacion ---
+    # algo: 3   -> Object Tracking: ojos siguen el objeto aprendido con el boton.
+    #             REQUISITO: desconectar/reconectar la HuskyLens antes de arrancar
+    #             si venia de algo=13 (Face Emotion).
+    # algo: 13  -> Face Emotion Recognition: ojos siguen la cara
