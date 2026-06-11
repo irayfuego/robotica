@@ -123,7 +123,7 @@ def normalize(text):
 class GeminiClient:
 
     _URL = ('https://generativelanguage.googleapis.com/v1beta/models/'
-            'gemini-2.0-flash:generateContent?key=%s')
+            '%s:generateContent?key=%s')
 
     _SYSTEM = (
         'Eres el cerebro de un robot amigable con ojos animados. '
@@ -139,8 +139,9 @@ class GeminiClient:
         'y breve. Habla siempre en espanol.'
     )
 
-    def __init__(self, api_key, logger=None):
+    def __init__(self, api_key, model='gemini-2.5-flash-lite', logger=None):
         self._key = api_key
+        self._model = model
         self._log = logger
 
     def dispatch(self, text, timeout=8.0):
@@ -164,7 +165,7 @@ class GeminiClient:
         }
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
-            self._URL % self._key, data=data,
+            self._URL % (self._model, self._key), data=data,
             headers={'Content-Type': 'application/json'}, method='POST')
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -217,6 +218,7 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         # Clave Gemini: si vacia, lee GEMINI_API_KEY del entorno.
         # NO poner el valor real en el YAML (el repo es publico).
         self.declare_parameter('gemini_api_key',   '')
+        self.declare_parameter('gemini_model',     'gemini-2.5-flash-lite')
 
         self._host       = self.get_parameter('husky_host').value
         port             = int(self.get_parameter('husky_mcp_port').value)
@@ -247,9 +249,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         # NLU: Gemini si hay clave; si no, palabras clave locales como fallback.
         api_key = (self.get_parameter('gemini_api_key').value
                    or os.environ.get('GEMINI_API_KEY', ''))
+        gemini_model = self.get_parameter('gemini_model').value
         if api_key:
-            self._gemini = GeminiClient(api_key, logger=self.get_logger().warn)
-            self.get_logger().info('NLU: Gemini 2.0 Flash activo.')
+            self._gemini = GeminiClient(api_key, model=gemini_model,
+                                        logger=self.get_logger().warn)
+            self.get_logger().info('NLU: Gemini activo  modelo=%s.' % gemini_model)
         else:
             self._gemini = None
             self.get_logger().info(

@@ -107,3 +107,8 @@ voice_command_node:
     # fichero de servicio systemd (o un drop-in en
     # /etc/systemd/system/robot_eyes.service.d/gemini.conf).
     gemini_api_key:    ""
+    # Modelo Gemini a usar. Opciones recomendadas (menor a mayor coste):
+    #   gemini-2.5-flash-lite   <- defecto, ideal para comandos cortos
+    #   gemini-2.5-flash
+    #   gemini-3.1-flash-lite
+    gemini_model:      "gemini-2.5-flash-lite"
