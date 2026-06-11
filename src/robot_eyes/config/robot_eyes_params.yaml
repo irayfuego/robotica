@@ -91,8 +91,8 @@ voice_command_node:
     husky_ssh_user:    "root"                 # SSH root sin password ya configurado
     husky_audio_dir:   "/opt/user/mtp/audio"  # carpeta de audio en la HuskyLens
     model_path:        "/home/mimavi/vosk-model-es"  # modelo Vosk espanol
-    window_sec:        5                       # duracion de cada ventana de escucha
-    rec_margin:        3.5                     # seg extra para que el firmware cierre el MP3
+    window_sec:        3                       # duracion de cada ventana (frases cortas caben)
+    rec_margin:        3.2                     # seg extra para que el firmware cierre el MP3
                                                # (medido ~2.9s; menos margen ABORTA la grabacion)
     sample_rate:       16000                   # Hz (mono) que espera Vosk
     vad_rms_threshold: 0.010                   # umbral de energia para detectar voz
@@ -101,3 +101,9 @@ voice_command_node:
     tts_speed:         130                     # debe coincidir con el TTS (estima mute)
     tmp_dir:           "/tmp"                  # carpeta temporal en el Pi
     enabled:           true                    # false para desactivar la escucha
+    # Clave de API de Gemini para NLU avanzado (LLM en lugar de palabras clave).
+    # NO poner el valor real aqui: este fichero esta en el repo publico.
+    # Alternativa recomendada: Environment=GEMINI_API_KEY=tu_clave en el
+    # fichero de servicio systemd (o un drop-in en
+    # /etc/systemd/system/robot_eyes.service.d/gemini.conf).
+    gemini_api_key:    ""

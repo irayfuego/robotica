@@ -14,7 +14,7 @@ Flujo (escucha continua):
   2. Por cada ventana grabada: scp del MP3 al Pi -> sox a WAV 16k mono.
   3. VAD por energia RMS: descarta ventanas en silencio (ahorra CPU de STT).
   4. Vosk transcribe el WAV a texto.
-  5. NLU por palabras clave -> publica emocion / comportamiento / habla.
+  5. NLU: Gemini 2.0 Flash si hay clave API; si no, palabras clave locales.
 
 Para que el robot no se oiga a si mismo, se silencia (no graba ni procesa)
 mientras suena el TTS: escucha /robot/say y se auto-mutea un tiempo estimado.
@@ -29,6 +29,8 @@ Publications:
   /robot/say           (std_msgs/String)  -- respuesta hablada del robot
 
 Parameters (ver robot_eyes_params.yaml, seccion voice_command_node).
+  gemini_api_key  clave API de Gemini; si vacia, usa variable GEMINI_API_KEY.
+                  Preferir variable de entorno: no ponerla en el YAML (es publico).
 """
 
 import json
@@ -37,6 +39,8 @@ import queue
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 import wave
 
 try:
@@ -59,12 +63,7 @@ from .huskylens_tts_node import McpSseClient
 
 
 # --------------------------------------------------------------------------- #
-#  NLU minimo por palabras clave (espanol).                                    #
-#  Cada regla: 'keys' (cualquiera presente dispara) + acciones opcionales      #
-#  'emotion' / 'behavior' / 'say'. Se evaluan en orden; la primera que case    #
-#  ejecuta sus acciones y se detiene.                                          #
-#  Las claves van SIN tildes; el texto reconocido tambien se normaliza sin     #
-#  tildes para casar de forma robusta (Vosk small a veces no acentua).         #
+#  NLU por palabras clave (fallback cuando Gemini no esta configurado o falla) #
 # --------------------------------------------------------------------------- #
 DEFAULT_RULES = [
     {'keys': ['ponte triste', 'estas triste', 'pon cara triste', 'triste', 'tristeza'],
@@ -103,6 +102,7 @@ DEFAULT_RULES = [
      'emotion': 'happy', 'say': 'Hola! Como estas?'},
 ]
 
+
 def normalize(text):
     """Minusculas y sin tildes/dieresis, para casar palabras clave de forma robusta
     (Vosk small a veces no acentua)."""
@@ -116,6 +116,85 @@ def normalize(text):
     return text
 
 
+# --------------------------------------------------------------------------- #
+#  Cliente Gemini 2.0 Flash (solo stdlib).                                     #
+#  Interpreta la transcripcion de voz y devuelve JSON con emotion/behavior/say #
+# --------------------------------------------------------------------------- #
+class GeminiClient:
+
+    _URL = ('https://generativelanguage.googleapis.com/v1beta/models/'
+            'gemini-2.0-flash:generateContent?key=%s')
+
+    _SYSTEM = (
+        'Eres el cerebro de un robot amigable con ojos animados. '
+        'Recibes lo que el usuario acaba de decir por voz (transcripcion Vosk, '
+        'puede tener errores menores) y decides como reacciona el robot. '
+        'Responde SIEMPRE con JSON valido con exactamente tres campos:\n'
+        '- emotion: una de [neutral, happy, sad, angry, surprised, confused, '
+        'suspicious, tired, love, sleeping] o cadena vacia si no cambia.\n'
+        '- behavior: una de [blink, look_around] o cadena vacia.\n'
+        '- say: frase corta en espanol que dira el robot en voz alta, '
+        'o cadena vacia si no tiene nada que decir.\n'
+        'El robot es simpatico, curioso y expresivo. Responde de forma natural '
+        'y breve. Habla siempre en espanol.'
+    )
+
+    def __init__(self, api_key, logger=None):
+        self._key = api_key
+        self._log = logger
+
+    def dispatch(self, text, timeout=8.0):
+        """Llama a Gemini y devuelve dict {emotion, behavior, say}, o None si falla."""
+        payload = {
+            'systemInstruction': {'parts': [{'text': self._SYSTEM}]},
+            'contents': [{'role': 'user', 'parts': [{'text': text}]}],
+            'generationConfig': {
+                'temperature': 0,
+                'responseMimeType': 'application/json',
+                'responseSchema': {
+                    'type': 'OBJECT',
+                    'properties': {
+                        'emotion':  {'type': 'STRING'},
+                        'behavior': {'type': 'STRING'},
+                        'say':      {'type': 'STRING'},
+                    },
+                    'required': ['emotion', 'behavior', 'say'],
+                },
+            },
+        }
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            self._URL % self._key, data=data,
+            headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = json.loads(r.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            if self._log:
+                self._log('Gemini HTTP %d: %s'
+                          % (e.code, e.read().decode('utf-8', 'replace')[:200]))
+            return None
+        except Exception as e:
+            if self._log:
+                self._log('Gemini error: %s' % e)
+            return None
+        try:
+            raw = body['candidates'][0]['content']['parts'][0]['text']
+            result = json.loads(raw)
+            return {
+                'emotion':  str(result.get('emotion',  '')).strip(),
+                'behavior': str(result.get('behavior', '')).strip(),
+                'say':      str(result.get('say',      '')).strip(),
+            }
+        except Exception as e:
+            if self._log:
+                self._log('Gemini parse error: %s  body=%s' % (e, str(body)[:300]))
+            return None
+
+
+# --------------------------------------------------------------------------- #
+#  Nodo ROS 2                                                                  #
+# --------------------------------------------------------------------------- #
 class VoiceCommandNode(Node if HAS_ROS else object):
 
     def __init__(self):
@@ -135,6 +214,9 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self.declare_parameter('tts_speed',        130)     # para estimar duracion del mute
         self.declare_parameter('tmp_dir',          '/tmp')
         self.declare_parameter('enabled',          True)
+        # Clave Gemini: si vacia, lee GEMINI_API_KEY del entorno.
+        # NO poner el valor real en el YAML (el repo es publico).
+        self.declare_parameter('gemini_api_key',   '')
 
         self._host       = self.get_parameter('husky_host').value
         port             = int(self.get_parameter('husky_mcp_port').value)
@@ -150,6 +232,28 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._tts_speed  = int(self.get_parameter('tts_speed').value)
         self._tmp        = self.get_parameter('tmp_dir').value.rstrip('/')
         self._enabled    = bool(self.get_parameter('enabled').value)
+
+        # Opciones SSH con conexion maestra persistente (ControlMaster): evita
+        # el handshake en cada transferencia. La WiFi de la HuskyLens es lenta
+        # (scp con handshake ~2s; reusando conexion ~0.5s).
+        self._ssh_cm = [
+            '-o', 'BatchMode=yes',
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ControlMaster=auto',
+            '-o', 'ControlPath=/tmp/vc-ssh-%r@%h:%p',
+            '-o', 'ControlPersist=120',
+        ]
+
+        # NLU: Gemini si hay clave; si no, palabras clave locales como fallback.
+        api_key = (self.get_parameter('gemini_api_key').value
+                   or os.environ.get('GEMINI_API_KEY', ''))
+        if api_key:
+            self._gemini = GeminiClient(api_key, logger=self.get_logger().warn)
+            self.get_logger().info('NLU: Gemini 2.0 Flash activo.')
+        else:
+            self._gemini = None
+            self.get_logger().info(
+                'NLU: palabras clave locales (configura GEMINI_API_KEY para LLM).')
 
         self._rules = DEFAULT_RULES
         self._mute_until = 0.0
@@ -185,8 +289,9 @@ class VoiceCommandNode(Node if HAS_ROS else object):
             threading.Thread(target=self._record_loop, daemon=True).start()
             threading.Thread(target=self._worker_loop, daemon=True).start()
             self.get_logger().info(
-                'Comandos de voz ACTIVOS  host=%s  ventana=%ds  wake=%r'
-                % (self._host, self._window, self._wake or '(siempre)'))
+                'Comandos de voz ACTIVOS  host=%s  ventana=%ds  wake=%r  nlu=%s'
+                % (self._host, self._window, self._wake or '(siempre)',
+                   'gemini' if self._gemini else 'reglas'))
         else:
             self.get_logger().info('Comandos de voz deshabilitados (enabled=false).')
 
@@ -206,6 +311,7 @@ class VoiceCommandNode(Node if HAS_ROS else object):
     def _record_loop(self):
         if not self._mcp.connect():
             self.get_logger().warn('No se pudo conectar al MCP para grabar; reintentando...')
+        self._open_ssh_master()
         slot = 0
         while self._running:
             # Si el robot esta hablando, espera a que termine antes de grabar
@@ -247,23 +353,36 @@ class VoiceCommandNode(Node if HAS_ROS else object):
             except Exception as e:
                 self.get_logger().warn('Procesado de voz fallo: %s' % e)
 
+    def _open_ssh_master(self):
+        """Abre (o reabre) la conexion SSH maestra reusable hacia la HuskyLens."""
+        try:
+            subprocess.run(
+                ['ssh'] + self._ssh_cm + ['%s@%s' % (self._ssh_user, self._host), 'true'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except Exception:
+            pass
+
     def _process(self, slot):
         base = 'voice_rec_%d.mp3' % slot
         mp3 = os.path.join(self._tmp, base)
         wav = os.path.join(self._tmp, 'voice_rec_%d.wav' % slot)
 
-        # Traer el MP3 grabado desde la HuskyLens (con reintentos: el fichero
-        # puede tardar unas decimas mas en aparecer finalizado)
-        src = '%s@%s:%s/%s' % (self._ssh_user, self._host, self._audio_dir, base)
+        # Traer el MP3 con 'ssh cat' sobre la conexion maestra (un solo
+        # round-trip de datos, mucho mas rapido que scp en esta WiFi). Con
+        # reintentos por si el fichero tarda unas decimas en finalizar.
+        remote = "%s/%s" % (self._audio_dir, base)
+        ok = False
         for attempt in range(3):
-            r = subprocess.run(
-                ['scp', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-                 src, mp3],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-            if r.returncode == 0:
+            with open(mp3, 'wb') as fh:
+                r = subprocess.run(
+                    ['ssh'] + self._ssh_cm + ['%s@%s' % (self._ssh_user, self._host),
+                                              "cat '%s'" % remote],
+                    stdout=fh, stderr=subprocess.DEVNULL, timeout=15)
+            if r.returncode == 0 and os.path.getsize(mp3) > 0:
+                ok = True
                 break
-            time.sleep(0.7)
-        else:
+            time.sleep(0.5)
+        if not ok:
             self.get_logger().warn('No se pudo traer %s tras 3 intentos' % base)
             return
 
@@ -324,6 +443,21 @@ class VoiceCommandNode(Node if HAS_ROS else object):
                 return
             norm = norm.split(self._wake, 1)[1].strip()
 
+        # Intentar primero con Gemini LLM
+        if self._gemini:
+            result = self._gemini.dispatch(text)
+            if result is not None:
+                if result['emotion']:
+                    self._publish(self._pub_emotion, result['emotion'])
+                if result['behavior']:
+                    self._publish(self._pub_behavior, result['behavior'])
+                if result['say']:
+                    self._publish(self._pub_say, result['say'])
+                self.get_logger().info('Gemini -> %s' % result)
+                return
+            self.get_logger().warn('Gemini fallo; usando reglas de palabras clave.')
+
+        # Fallback: palabras clave locales
         for rule in self._rules:
             if any(k in norm for k in rule['keys']):
                 if 'emotion' in rule:
@@ -333,8 +467,8 @@ class VoiceCommandNode(Node if HAS_ROS else object):
                 if 'say' in rule:
                     self._publish(self._pub_say, rule['say'])
                 self.get_logger().info(
-                    'Comando reconocido -> %s' % {k: v for k, v in rule.items()
-                                                  if k != 'keys'})
+                    'Comando reconocido (reglas) -> %s' % {k: v for k, v in rule.items()
+                                                           if k != 'keys'})
                 return
 
     def _publish(self, pub, value):

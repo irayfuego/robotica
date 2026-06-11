@@ -216,6 +216,16 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         self._tmp       = self.get_parameter('tmp_dir').value.rstrip('/')
         self._slots     = max(1, int(self.get_parameter('ring_slots').value))
 
+        # SSH con conexion maestra persistente (ControlMaster): subir el MP3 con
+        # scp tarda ~3.5s en esta WiFi; con conexion reusada baja a ~0.4s.
+        self._ssh_cm = [
+            '-o', 'BatchMode=yes',
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ControlMaster=auto',
+            '-o', 'ControlPath=/tmp/tts-ssh-%r@%h:%p',
+            '-o', 'ControlPersist=120',
+        ]
+
         self._mcp = McpSseClient('http://%s:%d' % (self._host, port),
                                  logger=self.get_logger().warn)
 
@@ -252,7 +262,17 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
                 pass
 
     # -------------------------------------------------------------- worker
+    def _open_ssh_master(self):
+        """Abre la conexion SSH maestra reusable hacia la HuskyLens."""
+        try:
+            subprocess.run(
+                ['ssh'] + self._ssh_cm + ['%s@%s' % (self._ssh_user, self._host), 'true'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except Exception:
+            pass
+
     def _worker_loop(self):
+        self._open_ssh_master()
         while self._running:
             try:
                 text = self._queue.get(timeout=0.5)
@@ -294,13 +314,15 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         except OSError:
             pass
 
-        # 3) scp a la HuskyLens
-        dest = '%s@%s:%s/%s' % (self._ssh_user, self._host, self._audio_dir, base)
-        subprocess.run(
-            ['scp', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-             mp3, dest],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=30)
+        # 3) subir a la HuskyLens con ssh 'cat >' sobre la conexion maestra
+        #    (un solo round-trip; mucho mas rapido que scp en esta WiFi)
+        remote = '%s/%s' % (self._audio_dir, base)
+        with open(mp3, 'rb') as fh:
+            subprocess.run(
+                ['ssh'] + self._ssh_cm + ['%s@%s' % (self._ssh_user, self._host),
+                                          "cat > '%s'" % remote],
+                stdin=fh, check=True, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=30)
 
         # 4) reproducir via MCP
         self.get_logger().info('TTS say (husky): "%s"' % text)
