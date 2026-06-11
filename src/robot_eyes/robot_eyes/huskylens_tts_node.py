@@ -8,24 +8,26 @@ servidor JSON-RPC sobre HTTP+SSE que escucha en el puerto 3000 y es accesible
 por red desde el Pi (no hace falta ninguna herramienta externa).
 
 Pipeline por cada mensaje en /robot/say:
-  1. espeak-ng genera un WAV en el Pi.
+  1. Piper TTS genera un WAV en el Pi (voz neuronal, mucho mas natural que espeak).
   2. sox lo convierte a MP3 (el reproductor de la HuskyLens solo acepta MP3).
-  3. scp sube el MP3 a /opt/user/mtp/audio/ de la HuskyLens (root sin password).
+  3. ssh 'cat >' sube el MP3 a /opt/user/mtp/audio/ de la HuskyLens.
   4. tools/call -> multimedia_control(play_music) reproduce el MP3.
 
 Subscriptions:
   /robot/say  (std_msgs/String)  -- texto a pronunciar
 
 Parameters:
-  husky_host        IP de la HuskyLens               (def. 192.168.1.32)
-  husky_mcp_port    puerto del MCP server            (def. 3000)
-  husky_ssh_user    usuario SSH de la HuskyLens       (def. root)
-  husky_audio_dir   carpeta de audio en la HuskyLens (def. /opt/user/mtp/audio)
-  tts_voice         voz de espeak-ng                  (def. es)
-  tts_speed         palabras por minuto               (def. 130)
-  volume            volumen de reproduccion 0-100     (def. 90)
-  tmp_dir           carpeta temporal en el Pi         (def. /tmp)
-  ring_slots        nombres MP3 rotativos             (def. 4)
+  husky_host          IP de la HuskyLens                    (def. 192.168.1.32)
+  husky_mcp_port      puerto del MCP server                 (def. 3000)
+  husky_ssh_user      usuario SSH de la HuskyLens           (def. root)
+  husky_audio_dir     carpeta de audio en la HuskyLens      (def. /opt/user/mtp/audio)
+  piper_model         ruta al .onnx de Piper                (def. /home/mimavi/piper-voices/es_ES-davefx-medium.onnx)
+  piper_binary        ejecutable de Piper; vacio = python3 -m piper
+  piper_length_scale  velocidad: <1.0 mas rapido, >1.0 mas lento  (def. 1.0)
+  tts_speed           palabras/min solo para estimar duracion de mute (def. 130)
+  volume              volumen de reproduccion 0-100         (def. 90)
+  tmp_dir             carpeta temporal en el Pi             (def. /tmp)
+  ring_slots          nombres MP3 rotativos                 (def. 4)
 """
 
 import json
@@ -196,25 +198,31 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
     def __init__(self):
         super().__init__('huskylens_tts_node')
 
-        self.declare_parameter('husky_host',      '192.168.1.32')
-        self.declare_parameter('husky_mcp_port',  3000)
-        self.declare_parameter('husky_ssh_user',  'root')
-        self.declare_parameter('husky_audio_dir', '/opt/user/mtp/audio')
-        self.declare_parameter('tts_voice',       'es')
-        self.declare_parameter('tts_speed',       130)
-        self.declare_parameter('volume',          90)
-        self.declare_parameter('tmp_dir',         '/tmp')
-        self.declare_parameter('ring_slots',      4)
+        self.declare_parameter('husky_host',          '192.168.1.32')
+        self.declare_parameter('husky_mcp_port',      3000)
+        self.declare_parameter('husky_ssh_user',      'root')
+        self.declare_parameter('husky_audio_dir',     '/opt/user/mtp/audio')
+        self.declare_parameter('piper_model',
+                               '/home/mimavi/piper-voices/es_ES-davefx-medium.onnx')
+        self.declare_parameter('piper_binary',        '')   # vacio = python3 -m piper
+        self.declare_parameter('piper_length_scale',  1.0)
+        self.declare_parameter('tts_speed',           130)  # solo para estimar mute
+        self.declare_parameter('volume',              90)
+        self.declare_parameter('tmp_dir',             '/tmp')
+        self.declare_parameter('ring_slots',          4)
 
-        self._host      = self.get_parameter('husky_host').value
-        port            = int(self.get_parameter('husky_mcp_port').value)
-        self._ssh_user  = self.get_parameter('husky_ssh_user').value
-        self._audio_dir = self.get_parameter('husky_audio_dir').value.rstrip('/')
-        self._voice     = self.get_parameter('tts_voice').value
-        self._speed     = str(self.get_parameter('tts_speed').value)
-        self._volume    = int(self.get_parameter('volume').value)
-        self._tmp       = self.get_parameter('tmp_dir').value.rstrip('/')
-        self._slots     = max(1, int(self.get_parameter('ring_slots').value))
+        self._host         = self.get_parameter('husky_host').value
+        port               = int(self.get_parameter('husky_mcp_port').value)
+        self._ssh_user     = self.get_parameter('husky_ssh_user').value
+        self._audio_dir    = self.get_parameter('husky_audio_dir').value.rstrip('/')
+        self._piper_model  = self.get_parameter('piper_model').value
+        piper_bin          = self.get_parameter('piper_binary').value.strip()
+        self._piper_cmd    = [piper_bin] if piper_bin else ['python3', '-m', 'piper']
+        self._length_scale = str(float(self.get_parameter('piper_length_scale').value))
+        self._speed        = int(self.get_parameter('tts_speed').value)
+        self._volume       = int(self.get_parameter('volume').value)
+        self._tmp          = self.get_parameter('tmp_dir').value.rstrip('/')
+        self._slots        = max(1, int(self.get_parameter('ring_slots').value))
 
         # SSH con conexion maestra persistente (ControlMaster): subir el MP3 con
         # scp tarda ~3.5s en esta WiFi; con conexion reusada baja a ~0.4s.
@@ -243,8 +251,8 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         threading.Thread(target=self._mcp.connect, daemon=True).start()
 
         self.get_logger().info(
-            'HuskyLens TTS listo  host=%s  voz=%s  vol=%d  -- publica en /robot/say'
-            % (self._host, self._voice, self._volume))
+            'HuskyLens TTS listo  host=%s  modelo=%s  vol=%d  -- publica en /robot/say'
+            % (self._host, os.path.basename(self._piper_model), self._volume))
 
     # ----------------------------------------------------------- callbacks
     def _cb_say(self, msg):
@@ -290,10 +298,15 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         wav = os.path.join(self._tmp, 'robot_say_%d.wav' % slot)
         mp3 = os.path.join(self._tmp, base)
 
-        # 1) espeak-ng -> WAV
+        # 1) Piper TTS -> WAV  (voz neuronal; texto por stdin)
         subprocess.run(
-            ['espeak-ng', '-v', self._voice, '-s', self._speed, '-w', wav, text],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            self._piper_cmd + [
+                '--model', self._piper_model,
+                '--length_scale', self._length_scale,
+                '--output_file', wav,
+            ],
+            input=text.encode('utf-8'), check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=30)
 
         # 2) WAV -> MP3 (el reproductor de la HuskyLens solo acepta MP3)
@@ -307,7 +320,7 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
                                  capture_output=True, text=True, timeout=10)
             duration = float(out.stdout.strip())
         except Exception:
-            duration = max(1.5, len(text.split()) / (int(self._speed) / 60.0))
+            duration = max(1.5, len(text.split()) / (self._speed / 60.0))
 
         try:
             os.remove(wav)

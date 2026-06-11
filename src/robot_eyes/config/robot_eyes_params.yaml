@@ -67,18 +67,22 @@ huskylens_gaze_bridge:
 # TTS por el altavoz de la HuskyLens.
 # Publica texto en /robot/say (std_msgs/String) y se oye por la camara:
 #   ros2 topic pub --once /robot/say std_msgs/msg/String "{data: 'hola'}"
-# Flujo: espeak-ng -> sox a MP3 -> scp a la HuskyLens -> play_music (MCP HTTP).
+# Flujo: Piper TTS -> WAV -> sox a MP3 -> ssh cat a la HuskyLens -> play_music (MCP).
 huskylens_tts_node:
   ros__parameters:
-    husky_host:      "192.168.1.32"        # IP de la HuskyLens
-    husky_mcp_port:  3000                   # puerto del MCP server del firmware
-    husky_ssh_user:  "root"                 # SSH root sin password ya configurado
-    husky_audio_dir: "/opt/user/mtp/audio"  # carpeta de audio en la HuskyLens
-    tts_voice:       "es"                    # voz de espeak-ng
-    tts_speed:       130                     # palabras por minuto
-    volume:          90                      # volumen de reproduccion 0-100
-    tmp_dir:         "/tmp"                  # carpeta temporal en el Pi
-    ring_slots:      4                       # nombres MP3 rotativos (anti-pisado)
+    husky_host:          "192.168.1.32"        # IP de la HuskyLens
+    husky_mcp_port:      3000                   # puerto del MCP server del firmware
+    husky_ssh_user:      "root"                 # SSH root sin password ya configurado
+    husky_audio_dir:     "/opt/user/mtp/audio"  # carpeta de audio en la HuskyLens
+    # Piper TTS (voz neuronal). Modelo descargado en /home/mimavi/piper-voices/
+    # Otras voces disponibles en: https://huggingface.co/rhasspy/piper-voices
+    piper_model:         "/home/mimavi/piper-voices/es_ES-davefx-medium.onnx"
+    piper_binary:        ""          # vacio = python3 -m piper (instalado con pip)
+    piper_length_scale:  1.0         # velocidad: 0.8=rapido 1.0=normal 1.2=lento
+    tts_speed:           130         # solo para estimar duracion de mute en voice_command_node
+    volume:              90          # volumen de reproduccion 0-100
+    tmp_dir:             "/tmp"      # carpeta temporal en el Pi
+    ring_slots:          4           # nombres MP3 rotativos (anti-pisado)
 
 # Comandos de voz en lenguaje natural, siempre activos.
 # Microfono de la HuskyLens (grabado via su MCP) + Vosk offline en el Pi.
