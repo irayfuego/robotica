@@ -29,6 +29,8 @@ setup(
         'console_scripts': [
             'robot_eyes_node  = robot_eyes.ros_node:main',
             'huskylens_bridge = robot_eyes.huskylens_gaze_bridge:main',
+            'huskylens_tts    = robot_eyes.huskylens_tts_node:main',
+            'voice_command    = robot_eyes.voice_command_node:main',
         ],
     },
 )

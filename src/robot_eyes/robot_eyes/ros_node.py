@@ -10,6 +10,10 @@ Subscriptions:
   /robot_eyes/face_position (geometry_msgs/Point) -- normalised face position
   /robot_eyes/pupil_size    (std_msgs/Float32)    -- pupil dilation [0,1]
   /robot_eyes/iris_color    (std_msgs/ColorRGBA)  -- iris color
+  /robot/say                (std_msgs/String)     -- speak text; local espeak-ng
+                                                     only if tts_local=true (the
+                                                     robot speaker is on the
+                                                     HuskyLens, see huskylens_tts_node)
 
 Publications:
   /robot_eyes/state  (std_msgs/String) -- active behavior name
@@ -23,6 +27,7 @@ Parameters:
   emotion_timeout
 """
 
+import subprocess
 import time
 import threading
 import random
@@ -74,6 +79,9 @@ class RobotEyesNode(Node if HAS_ROS else object):
             bg_color   = self.get_parameter('background').value
             iris_color = self.get_parameter('iris_color').value
             emo_tout   = self.get_parameter('emotion_timeout').value
+            tts_voice  = self.get_parameter('tts_voice').value
+            tts_speed  = self.get_parameter('tts_speed').value
+            tts_local  = self.get_parameter('tts_local').value
         else:
             fps        = 30
             sim_mode   = True
@@ -81,11 +89,19 @@ class RobotEyesNode(Node if HAS_ROS else object):
             bg_color   = [10, 10, 15]
             iris_color = [60, 120, 200]
             emo_tout   = _EMOTION_TIMEOUT
+            tts_voice  = 'es'
+            tts_speed  = 130
+            tts_local  = False
 
         self._fps             = fps
         self._sim_mode        = sim_mode
         self._auto_idle       = auto_idle
         self._emotion_timeout = emo_tout
+        self._tts_voice       = tts_voice
+        self._tts_speed       = str(tts_speed)
+        self._tts_local       = tts_local  # play espeak-ng on the Pi's own audio out
+        self._tts_lock        = threading.Lock()
+        self._tts_proc        = None   # current espeak-ng subprocess
 
         self._renderer = EyeRenderer(background_color=tuple(bg_color))
         self._engine   = AnimationEngine(fps=fps)
@@ -128,6 +144,7 @@ class RobotEyesNode(Node if HAS_ROS else object):
             self.create_subscription(Point,     '/robot_eyes/face_position', self._cb_face,       10)
             self.create_subscription(Float32,   '/robot_eyes/pupil_size',    self._cb_pupil,      10)
             self.create_subscription(ColorRGBA, '/robot_eyes/iris_color',    self._cb_iris_color, 10)
+            self.create_subscription(String,    '/robot/say',                self._cb_say,        10)
 
             self.create_service(Trigger, '/robot_eyes/play_behavior', self._srv_play)
 
@@ -150,6 +167,11 @@ class RobotEyesNode(Node if HAS_ROS else object):
         self.declare_parameter('background',      [10, 10, 15])
         self.declare_parameter('display_config',  '')
         self.declare_parameter('emotion_timeout', _EMOTION_TIMEOUT)
+        self.declare_parameter('tts_voice',       'es')
+        self.declare_parameter('tts_speed',       130)
+        # Speak through the Pi's own audio jack/HDMI. Off by default: the robot's
+        # speaker lives on the HuskyLens, driven by huskylens_tts_node.
+        self.declare_parameter('tts_local',       False)
 
     # --------------------------------------------------------------- logging
 
@@ -215,6 +237,34 @@ class RobotEyesNode(Node if HAS_ROS else object):
         response.success = True
         response.message = 'Playing blink'
         return response
+
+    def _cb_say(self, msg):
+        """Speak text via local espeak-ng TTS (non-blocking, interrupts previous speech).
+
+        Only active when the `tts_local` parameter is true. By default the robot
+        speaks through the HuskyLens speaker (see huskylens_tts_node), so this
+        local path stays off to avoid double audio on the Pi's own jack/HDMI."""
+        if not self._tts_local:
+            return
+        text = msg.data.strip()
+        if not text:
+            return
+        self._log_info('TTS say (local): "%s"' % text)
+        threading.Thread(target=self._say, args=(text,), daemon=True).start()
+
+    def _say(self, text):
+        """Run espeak-ng in a background thread. Kills any ongoing speech first."""
+        with self._tts_lock:
+            if self._tts_proc and self._tts_proc.poll() is None:
+                self._tts_proc.kill()
+            try:
+                self._tts_proc = subprocess.Popen(
+                    ['espeak-ng', '-v', self._tts_voice, '-s', self._tts_speed, text],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                self._tts_proc.wait(timeout=30)
+            except Exception as e:
+                self._log_error('TTS error: %s' % e)
 
     # --------------------------------------------------------------- helpers
 
