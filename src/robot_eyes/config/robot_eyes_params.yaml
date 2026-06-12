@@ -47,6 +47,7 @@ robot_eyes_node:
       rst_pin:    27
       bl_pin:     18
       spi_speed:  40000000   # 40 MHz
+      rotation:   180        # pantallas montadas giradas 180 grados
 
 huskylens_gaze_bridge:
   ros__parameters:

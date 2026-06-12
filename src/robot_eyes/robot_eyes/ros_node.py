@@ -130,6 +130,7 @@ class RobotEyesNode(Node if HAS_ROS else object):
                 'rst_pin':   self.get_parameter('display_config.rst_pin').value,
                 'bl_pin':    self.get_parameter('display_config.bl_pin').value,
                 'spi_speed': self.get_parameter('display_config.spi_speed').value,
+                'rotation':  self.get_parameter('display_config.rotation').value,
             } if HAS_ROS else {}
             self._display = DualDisplayController(config=display_cfg)
             try:
@@ -184,6 +185,7 @@ class RobotEyesNode(Node if HAS_ROS else object):
         self.declare_parameter('display_config.rst_pin',   27)
         self.declare_parameter('display_config.bl_pin',    18)
         self.declare_parameter('display_config.spi_speed', 40_000_000)
+        self.declare_parameter('display_config.rotation',  0)   # 180 si van al reves
         self.declare_parameter('emotion_timeout', _EMOTION_TIMEOUT)
         self.declare_parameter('tts_voice',       'es')
         self.declare_parameter('tts_speed',       130)

@@ -119,7 +119,11 @@ class GC9A01:
         time.sleep(0.02)
 
     def _get_madctl(self):
-        return {0: 0x18, 90: 0x28, 180: 0x48, 270: 0x88}.get(self._rotation, 0x18)
+        # MADCTL fijo: la rotacion de 180 se hace por software en
+        # display_image (flip de numpy, coste despreciable). La tabla MADCTL
+        # que habia aqui para 90/180/270 no era una rotacion real (0x48 es
+        # espejo X, no 180) y nunca se habia probado en hardware.
+        return 0x18
 
     def set_window(self, x0, y0, x1, y1):
         self._command(_GC9A01_CASET)
@@ -135,6 +139,9 @@ class GC9A01:
         if image.mode != "RGB":
             image = image.convert("RGB")
         arr = np.array(image, dtype=np.uint8)
+        if self._rotation == 180:
+            # Pantalla montada al reves: girar el frame 180 grados
+            arr = arr[::-1, ::-1]
         r = arr[:,:,0].astype(np.uint16)
         g = arr[:,:,1].astype(np.uint16)
         b = arr[:,:,2].astype(np.uint16)
@@ -170,6 +177,7 @@ class DualDisplayController:
         "cs_left":   8,          # CE0
         "cs_right":  7,          # CE1
         "spi_speed": 40_000_000,
+        "rotation":  0,          # 180 = pantallas montadas al reves
     }
 
     def __init__(self, config: Optional[dict] = None):
@@ -208,10 +216,12 @@ class DualDisplayController:
         self._left = GC9A01(
             spi=self._spi_left, dc_pin=cfg["dc_pin"], rst_pin=cfg["rst_pin"],
             cs_pin=cfg["cs_left"], bl_pin=cfg["bl_pin"], gpio=GPIO,
+            rotation=cfg["rotation"],
         )
         self._right = GC9A01(
             spi=self._spi_right, dc_pin=cfg["dc_pin"], rst_pin=cfg["rst_pin"],
             cs_pin=cfg["cs_right"], bl_pin=None, gpio=GPIO,
+            rotation=cfg["rotation"],
         )
 
         # Hardware reset ONCE — RST is shared between both displays.
