@@ -120,7 +120,13 @@ class RobotEyesNode(Node if HAS_ROS else object):
         self._display = None
         self._ready   = False
         if not sim_mode:
-            display_cfg = self.get_parameter('display_config').value or {} if HAS_ROS else {}
+            display_cfg = {
+                'spi_bus':   self.get_parameter('display_config.spi_bus').value,
+                'dc_pin':    self.get_parameter('display_config.dc_pin').value,
+                'rst_pin':   self.get_parameter('display_config.rst_pin').value,
+                'bl_pin':    self.get_parameter('display_config.bl_pin').value,
+                'spi_speed': self.get_parameter('display_config.spi_speed').value,
+            } if HAS_ROS else {}
             self._display = DualDisplayController(config=display_cfg)
             try:
                 self._display.begin()
@@ -165,7 +171,15 @@ class RobotEyesNode(Node if HAS_ROS else object):
         self.declare_parameter('auto_idle',       True)
         self.declare_parameter('iris_color',      [60, 120, 200])
         self.declare_parameter('background',      [10, 10, 15])
-        self.declare_parameter('display_config',  '')
+        # Pines/SPI del display. Se declaran como subparametros para que el
+        # bloque anidado display_config: del YAML se aplique de verdad
+        # (declarar 'display_config' como escalar lo dejaba siempre vacio y el
+        # driver caia en sus DEFAULT_CONFIG, ignorando el YAML).
+        self.declare_parameter('display_config.spi_bus',   0)
+        self.declare_parameter('display_config.dc_pin',    25)
+        self.declare_parameter('display_config.rst_pin',   27)
+        self.declare_parameter('display_config.bl_pin',    18)
+        self.declare_parameter('display_config.spi_speed', 40_000_000)
         self.declare_parameter('emotion_timeout', _EMOTION_TIMEOUT)
         self.declare_parameter('tts_voice',       'es')
         self.declare_parameter('tts_speed',       130)
