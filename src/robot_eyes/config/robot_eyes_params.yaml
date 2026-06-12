@@ -19,6 +19,11 @@ robot_eyes_node:
     # Segundos sin actualizacion de emocion antes de volver a neutral
     emotion_timeout: 8.0
 
+    # La inclinacion del parpado (la "V" de enfado, la caida triste) se
+    # espeja entre ojos. Si por el montaje fisico de las pantallas se ve
+    # invertida (el enfado parece pena), pon true en vez de recablear.
+    tilt_swap: false
+
     # Text-to-speech via espeak-ng.
     # Publica en /robot/say (std_msgs/String) para hacer hablar al robot.
     # Voces disponibles: es (espanol), es-la (latinoamerica), en, fr, de, it

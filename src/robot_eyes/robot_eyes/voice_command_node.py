@@ -131,10 +131,13 @@ class GeminiClient:
         'Eres el cerebro de un robot amigable con ojos animados. '
         'Recibes lo que el usuario acaba de decir por voz (transcripcion Vosk, '
         'puede tener errores menores) y decides como reacciona el robot. '
-        'Responde SIEMPRE con JSON valido con exactamente tres campos:\n'
+        'Responde SIEMPRE con JSON valido con exactamente cuatro campos:\n'
         '- emotion: una de [neutral, happy, sad, angry, surprised, confused, '
         'suspicious, tired, love, sleeping] o cadena vacia si no cambia.\n'
-        '- behavior: una de [blink, look_around] o cadena vacia.\n'
+        '- intensity: numero entre 0.0 y 1.0, lo intensa que es la emocion '
+        '(0.3 leve, 0.6 moderada, 1.0 maxima). Usa 1.0 si dudas.\n'
+        '- behavior: una de [blink, look_around, dizzy, roll_eyes, wink_right] '
+        'o cadena vacia.\n'
         '- say: frase corta en espanol que dira el robot en voz alta, '
         'o cadena vacia si no tiene nada que decir.\n'
         'El robot es simpatico, curioso y expresivo. Responde de forma natural '
@@ -157,11 +160,12 @@ class GeminiClient:
                 'responseSchema': {
                     'type': 'OBJECT',
                     'properties': {
-                        'emotion':  {'type': 'STRING'},
-                        'behavior': {'type': 'STRING'},
-                        'say':      {'type': 'STRING'},
+                        'emotion':   {'type': 'STRING'},
+                        'intensity': {'type': 'NUMBER'},
+                        'behavior':  {'type': 'STRING'},
+                        'say':       {'type': 'STRING'},
                     },
-                    'required': ['emotion', 'behavior', 'say'],
+                    'required': ['emotion', 'intensity', 'behavior', 'say'],
                 },
             },
         }
@@ -184,10 +188,15 @@ class GeminiClient:
         try:
             raw = body['candidates'][0]['content']['parts'][0]['text']
             result = json.loads(raw)
+            try:
+                intensity = max(0.0, min(1.0, float(result.get('intensity', 1.0))))
+            except (TypeError, ValueError):
+                intensity = 1.0
             return {
-                'emotion':  str(result.get('emotion',  '')).strip(),
-                'behavior': str(result.get('behavior', '')).strip(),
-                'say':      str(result.get('say',      '')).strip(),
+                'emotion':   str(result.get('emotion',  '')).strip(),
+                'intensity': intensity,
+                'behavior':  str(result.get('behavior', '')).strip(),
+                'say':       str(result.get('say',      '')).strip(),
             }
         except Exception as e:
             if self._log:
@@ -403,6 +412,10 @@ class VoiceCommandNode(Node if HAS_ROS else object):
             self._cleanup(wav)
             return
 
+        # Feedback visual inmediato: los ojos "se espabilan" en cuanto se
+        # detecta voz, antes de transcribir (la cara de "te he oido").
+        self._publish(self._pub_behavior, 'listening')
+
         text = self._transcribe(wav)
         self._cleanup(wav)
         if not text:
@@ -456,8 +469,14 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         # Modo conversacion con LLM: solo cuando se nombra al robot.
         if self._wake and self._wake in norm:
             instruction = norm.split(self._wake, 1)[1].strip() or norm
-            if self._gemini and self._dispatch_gemini(instruction):
-                return
+            if self._gemini:
+                # Mirada de "estoy pensando" mientras se espera al LLM; se
+                # cancela al llegar la respuesta (o la pisa el TTS al hablar).
+                self._publish(self._pub_behavior, 'thinking_loop')
+                ok = self._dispatch_gemini(instruction)
+                self._publish(self._pub_behavior, 'thinking_loop_stop')
+                if ok:
+                    return
             norm = instruction   # sin Gemini o fallo -> reglas con la instruccion
 
         # Reglas locales: unico camino sin wake-word y fallback del LLM.
@@ -470,7 +489,10 @@ class VoiceCommandNode(Node if HAS_ROS else object):
             self.get_logger().warn('Gemini fallo; usando reglas de palabras clave.')
             return False
         if result['emotion']:
-            self._publish(self._pub_emotion, result['emotion'])
+            # "emocion:intensidad" -> robot_eyes_node modula la expresion
+            intensity = result.get('intensity', 1.0)
+            self._publish(self._pub_emotion,
+                          '%s:%.2f' % (result['emotion'], intensity))
         if result['behavior']:
             self._publish(self._pub_behavior, result['behavior'])
         if result['say']:

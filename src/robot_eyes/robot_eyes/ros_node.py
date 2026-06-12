@@ -44,7 +44,8 @@ except ImportError:
     print('[WARN] rclpy not found -- running in simulation mode.')
 
 from .eye_renderer import EyeRenderer, EyeState
-from .animation_engine import AnimationEngine, Animation, Keyframe, EasingType
+from .animation_engine import (AnimationEngine, Animation, Keyframe,
+                               EasingType, lerp_state)
 from .behaviors import BehaviorLibrary, BEHAVIOR_MAP, EMOTION_STATES
 from .display_driver import DualDisplayController
 
@@ -82,6 +83,7 @@ class RobotEyesNode(Node if HAS_ROS else object):
             tts_voice  = self.get_parameter('tts_voice').value
             tts_speed  = self.get_parameter('tts_speed').value
             tts_local  = self.get_parameter('tts_local').value
+            tilt_swap  = self.get_parameter('tilt_swap').value
         else:
             fps        = 30
             sim_mode   = True
@@ -92,6 +94,7 @@ class RobotEyesNode(Node if HAS_ROS else object):
             tts_voice  = 'es'
             tts_speed  = 130
             tts_local  = False
+            tilt_swap  = False
 
         self._fps             = fps
         self._sim_mode        = sim_mode
@@ -100,6 +103,7 @@ class RobotEyesNode(Node if HAS_ROS else object):
         self._tts_voice       = tts_voice
         self._tts_speed       = str(tts_speed)
         self._tts_local       = tts_local  # play espeak-ng on the Pi's own audio out
+        self._tilt_swap       = bool(tilt_swap)
         self._tts_lock        = threading.Lock()
         self._tts_proc        = None   # current espeak-ng subprocess
 
@@ -186,6 +190,10 @@ class RobotEyesNode(Node if HAS_ROS else object):
         # Speak through the Pi's own audio jack/HDMI. Off by default: the robot's
         # speaker lives on the HuskyLens, driven by huskylens_tts_node.
         self.declare_parameter('tts_local',       False)
+        # The lid tilt (angry "V" / sad droop) is mirrored between both eyes.
+        # If, due to how the displays are physically mounted, the tilt looks
+        # inverted (angry reads as sad), set tilt_swap: true instead of rewiring.
+        self.declare_parameter('tilt_swap',       False)
 
     # --------------------------------------------------------------- logging
 
@@ -208,7 +216,18 @@ class RobotEyesNode(Node if HAS_ROS else object):
         self._engine.set_base_gaze(float(msg.x), float(msg.y))
 
     def _cb_emotion(self, msg):
+        # Accepts "name" or "name:intensity" (e.g. "happy:0.4"); intensity in
+        # [0,1] blends between neutral and the full expression.
         name = msg.data.strip().lower()
+        intensity = 1.0
+        if ':' in name:
+            name, _, frac = name.partition(':')
+            name = name.strip()
+            try:
+                intensity = max(0.0, min(1.0, float(frac)))
+            except ValueError:
+                intensity = 1.0
+
         factory = EMOTION_MAP.get(name)
         if not factory:
             self._log_warn('Unknown emotion: %s' % name)
@@ -216,15 +235,29 @@ class RobotEyesNode(Node if HAS_ROS else object):
 
         # Play the transition animation and persist the expression into the
         # base state so it survives blinks and idle glances
-        if name != 'neutral':
+        if name == 'neutral' or intensity < 0.05:
+            # Reset to neutral, keeping the configured iris color
+            self._engine.play(self._make_neutral_anim())
+            self._engine.set_base_expression(self._neutral_state)
+            name = 'neutral'
+        elif intensity < 0.97:
+            # Partial emotion: blend neutral -> full state by intensity
+            target_full = EMOTION_STATES.get(name)
+            if target_full is None:
+                self._engine.play(factory())
+            else:
+                blended = lerp_state(self._neutral_state, target_full,
+                                     intensity, EasingType.LINEAR)
+                kf = [Keyframe(blended, 0.30, EasingType.EASE_OUT)]
+                self._engine.play(Animation('emotion_' + name,
+                                            left_keyframes=kf,
+                                            channels=self._EXPR_CHANNELS))
+                self._engine.set_base_expression(blended)
+        else:
             self._engine.play(factory())
             target_state = EMOTION_STATES.get(name)
             if target_state:
                 self._engine.set_base_expression(target_state)
-        else:
-            # Reset to neutral, keeping the configured iris color
-            self._engine.play(self._make_neutral_anim())
-            self._engine.set_base_expression(self._neutral_state)
 
         self._current_emotion   = name
         self._last_emotion_time = time.time()
@@ -283,7 +316,8 @@ class RobotEyesNode(Node if HAS_ROS else object):
     # --------------------------------------------------------------- helpers
 
     # Expression-only channels: relax the face without recentering the gaze
-    _EXPR_CHANNELS = frozenset({'lids', 'pupil', 'iris', 'squint', 'eyebrow'})
+    _EXPR_CHANNELS = frozenset({'lids', 'pupil', 'iris', 'squint', 'eyebrow',
+                                'overlay'})
 
     def _make_neutral_anim(self):
         """Neutral transition built from the node's own neutral state,
@@ -293,6 +327,11 @@ class RobotEyesNode(Node if HAS_ROS else object):
                          channels=self._EXPR_CHANNELS)
 
     def _play_by_name(self, name):
+        # "<anim>_stop" cancels a looping animation of that name (e.g. the TTS
+        # node publishes speaking / speaking_stop around each utterance).
+        if name.endswith('_stop'):
+            self._engine.cancel_if(name[:-5])
+            return
         factory = BEHAVIOR_MAP.get(name)
         if factory:
             anim = self._make_neutral_anim() if name == 'neutral' else factory()
@@ -312,8 +351,10 @@ class RobotEyesNode(Node if HAS_ROS else object):
             now = t0
 
             left_state, right_state = self._engine.get_states()
-            left_img  = self._renderer.render(left_state)
-            right_img = self._renderer.render(right_state)
+            # mirror flips the lid tilt so the inner corners of both eyes
+            # face each other (angry "V", sad droop)
+            left_img  = self._renderer.render(left_state,  mirror=self._tilt_swap)
+            right_img = self._renderer.render(right_state, mirror=not self._tilt_swap)
 
             if self._display and self._ready:
                 try:

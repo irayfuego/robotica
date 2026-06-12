@@ -51,18 +51,23 @@ HALF_CLOSED = EyeState(
 # Emotion target states (module-level, importable for set_base_expression)
 # ---------------------------------------------------------------------------
 
+# lid_tilt: negative = inner corners down (angry "V"), positive = outer
+# corners down (sad droop). lower_lid_curve: smiling ^_^ arc. overlay and
+# pupil_style add animated decorations (tear, Zz, heart pupils...).
 EMOTION_STATES = {
     "neutral": _open(),
 
     "happy": EyeState(
-        upper_lid=0.85, lower_lid=0.25, pupil_size=0.60,
-        iris_color=(80, 180, 120), squint=0.30,
+        upper_lid=0.85, lower_lid=0.55, pupil_size=0.60,
+        iris_color=(80, 180, 120), squint=0.15,
+        lower_lid_curve=1.0,
     ),
 
     "sad": EyeState(
         gaze_x=0.0, gaze_y=0.35,
         upper_lid=0.55, lower_lid=0.10, pupil_size=0.35,
         iris_color=(60, 80, 160), squint=0.0,
+        lid_tilt=0.60, overlay='tear',
     ),
 
     "surprised": EyeState(
@@ -73,36 +78,42 @@ EMOTION_STATES = {
     "angry": EyeState(
         upper_lid=0.65, lower_lid=0.30, pupil_size=0.25,
         iris_color=(200, 60, 40), squint=0.50, eyebrow=-0.8,
+        lid_tilt=-0.70,
     ),
 
     "confused": EyeState(
         gaze_x=0.3, gaze_y=-0.2,
         upper_lid=0.75, lower_lid=0.10, pupil_size=0.48,
         iris_color=(100, 160, 80), squint=0.20,
+        lid_tilt=-0.15, overlay='sweat',
     ),
 
     "suspicious": EyeState(
         gaze_x=0.25, gaze_y=0.0,
         upper_lid=0.55, lower_lid=0.25, pupil_size=0.30,
         iris_color=(100, 100, 60), squint=0.55,
+        lid_tilt=-0.35,
     ),
 
     "tired": EyeState(
         gaze_x=0.0, gaze_y=0.2,
         upper_lid=0.42, lower_lid=0.10, pupil_size=0.38,
         iris_color=(60, 100, 160), squint=0.18,
+        lid_tilt=0.40,
     ),
 
     "sleeping": EyeState(
         gaze_x=0.0, gaze_y=0.3,
         upper_lid=0.02, lower_lid=0.65, pupil_size=0.20,
         iris_color=(50, 80, 140), squint=0.0,
+        overlay='zz',
     ),
 
     "love": EyeState(
         gaze_x=0.0, gaze_y=-0.1,
-        upper_lid=0.90, lower_lid=0.10, pupil_size=0.88,
+        upper_lid=0.90, lower_lid=0.25, pupil_size=0.88,
         iris_color=(220, 80, 120), squint=0.22,
+        lower_lid_curve=0.5, pupil_style='heart',
     ),
 }
 
@@ -275,6 +286,7 @@ class BehaviorLibrary:
             gaze_x=0.3, gaze_y=-0.2,
             upper_lid=0.60, lower_lid=0.15, pupil_size=0.50,
             iris_color=(100, 160, 80), squint=0.40,
+            lid_tilt=-0.15, overlay='sweat',
         )
         rkf = [Keyframe(rkf_st, 0.25)]
         return Animation("emotion_confused", left_keyframes=lkf, right_keyframes=rkf)
@@ -323,6 +335,7 @@ class BehaviorLibrary:
             gaze_x=0.0, gaze_y=0.3,
             upper_lid=0.0, lower_lid=0.70, pupil_size=0.20,
             iris_color=(50, 80, 140),
+            overlay='zz',
         )
         kf = [
             Keyframe(sl1, 1.8, EasingType.EASE_IN_OUT),
@@ -351,12 +364,51 @@ class BehaviorLibrary:
         return Animation("thinking", left_keyframes=kf, channels=CH_GAZE)
 
     @staticmethod
+    def thinking_loop() -> Animation:
+        """Looping 'pondering' gaze for while the robot waits for the LLM.
+        Cancelled via engine.cancel_if('thinking_loop') or by the next anim."""
+        kf = [
+            Keyframe(_open(gaze_x=0.5,  gaze_y=-0.4), 0.30, hold=0.7),
+            Keyframe(_open(gaze_x=0.25, gaze_y=-0.45), 0.35, hold=0.5),
+            Keyframe(_open(gaze_x=0.55, gaze_y=-0.25), 0.35, hold=0.6),
+        ]
+        return Animation("thinking_loop", left_keyframes=kf, channels=CH_GAZE,
+                         loop=True)
+
+    @staticmethod
+    def listening() -> Animation:
+        """Attention perk: eyes open wide and pupils dilate briefly, signalling
+        'I heard you' right after speech is detected."""
+        st = EyeState(upper_lid=1.0, lower_lid=0.0, pupil_size=0.72)
+        kf = [Keyframe(st, 0.15, EasingType.EASE_OUT, hold=1.4)]
+        return Animation("listening", left_keyframes=kf,
+                         channels=frozenset({'lids', 'pupil'}))
+
+    @staticmethod
+    def speaking() -> Animation:
+        """Subtle lively eye motion while the robot's voice is playing.
+        Loops until cancelled via engine.cancel_if('speaking')."""
+        kf = [
+            Keyframe(_open(gaze_y=-0.05, pupil=0.55),               0.30, EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_x=0.05,  gaze_y=0.03, pupil=0.50),  0.35, EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_x=-0.05, gaze_y=-0.02, pupil=0.58), 0.32, EasingType.EASE_IN_OUT),
+            Keyframe(_open(gaze_y=0.04,  pupil=0.52),               0.36, EasingType.EASE_IN_OUT),
+        ]
+        return Animation("speaking", left_keyframes=kf, channels=CH_GAZE_PUPIL,
+                         loop=True)
+
+    @staticmethod
     def dizzy() -> Animation:
+        # Spiral pupils while the gaze whirls around, back to normal at the end
         pts = [(0.8, 0.0), (0.0, -0.8), (-0.8, 0.0),
                (0.0, 0.8), (0.8, 0.0), (0.0, -0.8), (-0.8, 0.0)]
-        kf  = [Keyframe(_open(gaze_x=x, gaze_y=y), 0.15) for x, y in pts]
+        def _spin(x, y):
+            st = _open(gaze_x=x, gaze_y=y)
+            st.pupil_style = 'spiral'
+            return st
+        kf  = [Keyframe(_spin(x, y), 0.15) for x, y in pts]
         kf += [Keyframe(_open(), 0.3, EasingType.EASE_OUT)]
-        return Animation("dizzy", left_keyframes=kf, channels=CH_GAZE)
+        return Animation("dizzy", left_keyframes=kf, channels=CH_GAZE_PUPIL)
 
     @staticmethod
     def roll_eyes() -> Animation:
@@ -408,6 +460,9 @@ BEHAVIOR_MAP = {
     "look_around":   BehaviorLibrary.look_around,
     "scan":          BehaviorLibrary.scan_horizontal,
     "thinking":      BehaviorLibrary.thinking,
+    "thinking_loop": BehaviorLibrary.thinking_loop,
+    "listening":     BehaviorLibrary.listening,
+    "speaking":      BehaviorLibrary.speaking,
     "roll_eyes":     BehaviorLibrary.roll_eyes,
     "dizzy":         BehaviorLibrary.dizzy,
     "look_away":     BehaviorLibrary.look_away_shy,

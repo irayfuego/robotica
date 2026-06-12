@@ -244,6 +244,10 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
 
         self.create_subscription(String, '/robot/say', self._cb_say, 10)
 
+        # Los ojos se animan mientras el robot habla: se publica 'speaking' al
+        # empezar la reproduccion y 'speaking_stop' al terminar.
+        self._pub_behavior = self.create_publisher(String, '/robot_eyes/behavior', 10)
+
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
 
@@ -346,8 +350,13 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
             self.get_logger().warn('play_music fallo: %s' % info)
             return
 
-        # Esperar a que termine la reproduccion antes del siguiente texto.
+        # Animar los ojos mientras suena la voz y esperar a que termine la
+        # reproduccion antes del siguiente texto.
+        m = String(); m.data = 'speaking'
+        self._pub_behavior.publish(m)
         time.sleep(duration + 0.4)
+        m = String(); m.data = 'speaking_stop'
+        self._pub_behavior.publish(m)
 
     def shutdown(self):
         self._running = False

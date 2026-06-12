@@ -64,6 +64,8 @@ def lerp_state(s1: EyeState, s2: EyeState, t: float,
     # ELASTIC / BOUNCE easings overshoot past 1.0, so every channel must be
     # clamped to its valid range before reaching the renderer.
     et = ease(t, easing)
+    # Discrete (non-interpolable) channels switch at the halfway point.
+    disc = s2 if et >= 0.5 else s1
     return EyeState(
         gaze_x    = _clamp(lerp(s1.gaze_x,     s2.gaze_x,     et), -1.0, 1.0),
         gaze_y    = _clamp(lerp(s1.gaze_y,     s2.gaze_y,     et), -1.0, 1.0),
@@ -74,6 +76,11 @@ def lerp_state(s1: EyeState, s2: EyeState, t: float,
                           for a, b in zip(s1.iris_color, s2.iris_color)),
         squint    = _clamp(lerp(s1.squint,     s2.squint,     et),  0.0, 1.0),
         eyebrow   = _clamp(lerp(s1.eyebrow,    s2.eyebrow,    et), -1.0, 1.0),
+        lid_tilt  = _clamp(lerp(s1.lid_tilt,   s2.lid_tilt,   et), -1.0, 1.0),
+        lower_lid_curve = _clamp(lerp(s1.lower_lid_curve,
+                                      s2.lower_lid_curve,     et),  0.0, 1.0),
+        pupil_style = disc.pupil_style,
+        overlay     = disc.overlay,
     )
 
 
@@ -90,11 +97,12 @@ class Keyframe:
 # gaze-only glance keeps the active emotion's lids, squint and iris color.
 CHANNEL_ATTRS = {
     'gaze':    ('gaze_x', 'gaze_y'),
-    'lids':    ('upper_lid', 'lower_lid'),
-    'pupil':   ('pupil_size',),
+    'lids':    ('upper_lid', 'lower_lid', 'lid_tilt', 'lower_lid_curve'),
+    'pupil':   ('pupil_size', 'pupil_style'),
     'iris':    ('iris_color',),
     'squint':  ('squint',),
     'eyebrow': ('eyebrow',),
+    'overlay': ('overlay',),
 }
 
 
@@ -191,7 +199,8 @@ class AnimationEngine:
         """
         with self._lock:
             for attr in ('upper_lid', 'lower_lid', 'pupil_size',
-                         'iris_color', 'squint', 'eyebrow'):
+                         'iris_color', 'squint', 'eyebrow',
+                         'lid_tilt', 'lower_lid_curve', 'pupil_style', 'overlay'):
                 val = getattr(state, attr)
                 setattr(self._base_left,  attr, val)
                 setattr(self._base_right, attr, val)
@@ -199,6 +208,13 @@ class AnimationEngine:
     def get_states(self):
         with self._lock:
             return self.left_state, self.right_state
+
+    def cancel_if(self, name: str):
+        """If the currently playing animation has this name, ease back to the
+        base state (used e.g. to end the looping 'speaking' animation)."""
+        with self._lock:
+            if self._current_anim is not None and self._current_anim.name == name:
+                self._start_return_to_base()
 
     # ----------------------------------------------------------------- private
 
@@ -310,6 +326,10 @@ class AnimationEngine:
             iris_color= src.iris_color,
             squint    = src.squint,
             eyebrow   = src.eyebrow,
+            lid_tilt  = src.lid_tilt,
+            lower_lid_curve = src.lower_lid_curve,
+            pupil_style     = src.pupil_style,
+            overlay         = src.overlay,
         )
 
     def _merge_with_base(self, state: EyeState, base: EyeState,
@@ -369,6 +389,10 @@ class AnimationEngine:
             iris_color= self._base_left.iris_color,
             squint    = self._base_left.squint,
             eyebrow   = self._base_left.eyebrow,
+            lid_tilt  = self._base_left.lid_tilt,
+            lower_lid_curve = 0.0,
+            pupil_style     = self._base_left.pupil_style,
+            overlay         = self._base_left.overlay,
         )
         # Return-to-base state (current expression fully open)
         rtn = self._copy_state(self._base_left)
