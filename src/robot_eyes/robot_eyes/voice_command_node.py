@@ -67,10 +67,22 @@ from .huskylens_tts_node import McpSseClient
 # --------------------------------------------------------------------------- #
 #  NLU por palabras clave (fallback cuando Gemini no esta configurado o falla) #
 # --------------------------------------------------------------------------- #
+# Se evaluan EN ORDEN y gana la primera que casa: las claves mas especificas
+# ('parpadea dos veces', 'mira a la izquierda') van ANTES que las genericas
+# ('parpadea', 'mira alrededor'). Claves sin tildes (el texto se normaliza).
 DEFAULT_RULES = [
-    {'keys': ['ponte triste', 'estas triste', 'pon cara triste', 'triste', 'tristeza'],
+    # ---- dormir / despertar (antes que 'hola': 'buenos dias' despierta) ----
+    {'keys': ['despierta', 'despiertate', 'levantate', 'buenos dias'],
+     'emotion': 'neutral', 'behavior': 'wake_up', 'say': 'Buenos dias!'},
+    {'keys': ['duermete', 'a dormir', 'buenas noches', 'duerme', 've a dormir'],
+     'emotion': 'sleeping', 'say': 'Buenas noches.'},
+
+    # ---- emociones ---------------------------------------------------------
+    {'keys': ['ponte triste', 'estas triste', 'pon cara triste', 'triste',
+              'tristeza', 'pena'],
      'emotion': 'sad'},
-    {'keys': ['enfadado', 'enojado', 'enfadate', 'enojate', 'rabia', 'enfado'],
+    {'keys': ['enfadado', 'enojado', 'enfadate', 'enojate', 'rabia', 'enfado',
+              'furioso'],
      'emotion': 'angry'},
     {'keys': ['sorprendido', 'sorpresa', 'asombrado', 'asombro'],
      'emotion': 'surprised'},
@@ -78,29 +90,67 @@ DEFAULT_RULES = [
      'emotion': 'confused'},
     {'keys': ['sospecha', 'sospechoso', 'desconfia', 'desconfianza'],
      'emotion': 'suspicious'},
-    {'keys': ['cansado', 'sueno', 'agotado', 'fatiga'],
+    {'keys': ['cansado', 'sueno', 'agotado', 'fatiga', 'aburrido'],
      'emotion': 'tired'},
     {'keys': ['te quiero', 'enamorado', 'corazon', 'amor', 'carino'],
      'emotion': 'love', 'say': 'Yo tambien te quiero.'},
-    {'keys': ['duermete', 'a dormir', 'buenas noches', 'duerme', 've a dormir'],
-     'emotion': 'sleeping', 'say': 'Buenas noches.'},
     {'keys': ['ponte feliz', 'estas feliz', 'alegrate', 'feliz', 'contento',
               'alegre', 'sonrie', 'alegria'],
      'emotion': 'happy', 'say': 'Que alegria!'},
     {'keys': ['neutral', 'tranquilo', 'relajate', 'calma', 'normal'],
      'emotion': 'neutral'},
-    {'keys': ['parpadea', 'parpadear', 'guina'],
+
+    # ---- efectos especiales de los ojos ------------------------------------
+    {'keys': ['mareado', 'mareo', 'te mareas', 'das vueltas'],
+     'behavior': 'dizzy', 'say': 'Uy, que mareo!'},
+    {'keys': ['ojos en blanco'],
+     'behavior': 'roll_eyes'},
+    {'keys': ['dilata las pupilas', 'pupilas grandes'],
+     'behavior': 'dilate'},
+
+    # ---- parpadeos y guinos (especificos antes que genericos) --------------
+    {'keys': ['parpadea dos veces', 'doble parpadeo'],
+     'behavior': 'double_blink'},
+    {'keys': ['parpadea despacio', 'parpadeo lento'],
+     'behavior': 'slow_blink'},
+    {'keys': ['parpadea', 'parpadear', 'parpadeo'],
      'behavior': 'blink'},
+    {'keys': ['guina el ojo izquierdo', 'guino izquierdo'],
+     'behavior': 'wink_left'},
+    {'keys': ['guina', 'guino', 'guiname'],
+     'behavior': 'wink_right'},
+
+    # ---- mirada (especificos antes que 'mira alrededor') -------------------
+    {'keys': ['mira a la izquierda', 'mira izquierda'],
+     'behavior': 'look_left'},
+    {'keys': ['mira a la derecha', 'mira derecha'],
+     'behavior': 'look_right'},
+    {'keys': ['mira arriba', 'mira hacia arriba'],
+     'behavior': 'look_up'},
+    {'keys': ['mira abajo', 'mira hacia abajo'],
+     'behavior': 'look_down'},
+    {'keys': ['mira al frente', 'mira al centro', 'mirame'],
+     'behavior': 'look_center'},
     {'keys': ['mira alrededor', 'mira a tu alrededor', 'busca', 'explora',
               'echa un vistazo'],
      'behavior': 'look_around'},
+    {'keys': ['escanea', 'escaneo', 'rastrea'],
+     'behavior': 'scan'},
+    {'keys': ['piensa', 'pensando', 'reflexiona'],
+     'behavior': 'thinking'},
+    {'keys': ['atencion', 'atento', 'alerta'],
+     'behavior': 'notice'},
+
+    # ---- social -------------------------------------------------------------
     {'keys': ['como te llamas', 'tu nombre', 'quien eres'],
      'say': 'Soy tu robot, encantado.'},
     {'keys': ['como estas', 'que tal'],
      'say': 'Estoy muy bien, gracias.'},
+    {'keys': ['gracias'],
+     'emotion': 'happy', 'say': 'De nada!'},
     {'keys': ['adios', 'hasta luego', 'nos vemos', 'chao'],
      'emotion': 'happy', 'say': 'Hasta luego!'},
-    {'keys': ['hola', 'buenos dias', 'buenas tardes', 'saluda', 'saludo'],
+    {'keys': ['hola', 'buenas tardes', 'saluda', 'saludo'],
      'emotion': 'happy', 'say': 'Hola! Como estas?'},
 ]
 
@@ -136,7 +186,9 @@ class GeminiClient:
         'suspicious, tired, love, sleeping] o cadena vacia si no cambia.\n'
         '- intensity: numero entre 0.0 y 1.0, lo intensa que es la emocion '
         '(0.3 leve, 0.6 moderada, 1.0 maxima). Usa 1.0 si dudas.\n'
-        '- behavior: una de [blink, look_around, dizzy, roll_eyes, wink_right] '
+        '- behavior: una de [blink, double_blink, wink_right, wink_left, '
+        'look_around, look_left, look_right, look_up, look_down, look_center, '
+        'scan, thinking, dizzy, roll_eyes, notice, dilate, wake_up] '
         'o cadena vacia.\n'
         '- say: frase corta en espanol que dira el robot en voz alta, '
         'o cadena vacia si no tiene nada que decir.\n'
