@@ -100,7 +100,10 @@ voice_command_node:
                                                # (medido ~2.9s; menos margen ABORTA la grabacion)
     sample_rate:       16000                   # Hz (mono) que espera Vosk
     vad_rms_threshold: 0.010                   # umbral de energia para detectar voz
-    wake_word:         ""                      # vacio = reacciona siempre; ej "robot"
+    wake_word:         "robot"                 # NLU hibrido: sin esta palabra solo
+                                               # reglas locales (gratis); "robot ..."
+                                               # invoca a Gemini (lenguaje natural).
+                                               # Vacio = nunca llama a Gemini (solo reglas)
     self_mute_margin:  1.5                     # seg extra de mute tras hablar (anti-eco)
     tts_speed:         130                     # debe coincidir con el TTS (estima mute)
     tmp_dir:           "/tmp"                  # carpeta temporal en el Pi

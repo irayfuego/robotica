@@ -14,7 +14,9 @@ Flujo (escucha continua):
   2. Por cada ventana grabada: scp del MP3 al Pi -> sox a WAV 16k mono.
   3. VAD por energia RMS: descarta ventanas en silencio (ahorra CPU de STT).
   4. Vosk transcribe el WAV a texto.
-  5. NLU: Gemini 2.0 Flash si hay clave API; si no, palabras clave locales.
+  5. NLU hibrido (ver _dispatch): sin wake-word, solo reglas locales (gratis);
+     con wake-word ('robot'), la instruccion se manda a Gemini para lenguaje
+     natural. Asi solo las frases dirigidas al robot consumen cuota del LLM.
 
 Para que el robot no se oiga a si mismo, se silencia (no graba ni procesa)
 mientras suena el TTS: escucha /robot/say y se auto-mutea un tiempo estimado.
@@ -440,28 +442,43 @@ class VoiceCommandNode(Node if HAS_ROS else object):
 
     # ------------------------------------------------------------------ NLU
     def _dispatch(self, text):
+        """NLU hibrido para no malgastar la cuota de Gemini:
+          - Si el texto NO menciona el wake-word: SOLO reglas locales (gratis,
+            offline). El robot sigue "siempre activo" para comandos basicos
+            (ponte feliz, hola...) sin gastar ni una llamada al LLM.
+          - Si menciona el wake-word ('robot'): se manda la instruccion (sin la
+            palabra) a Gemini para entender lenguaje natural libre. Si Gemini
+            falla o no esta configurado, cae a las reglas locales.
+        Asi solo las frases dirigidas explicitamente al robot consumen cuota.
+        """
         norm = normalize(text)
 
-        if self._wake:
-            if self._wake not in norm:
+        # Modo conversacion con LLM: solo cuando se nombra al robot.
+        if self._wake and self._wake in norm:
+            instruction = norm.split(self._wake, 1)[1].strip() or norm
+            if self._gemini and self._dispatch_gemini(instruction):
                 return
-            norm = norm.split(self._wake, 1)[1].strip()
+            norm = instruction   # sin Gemini o fallo -> reglas con la instruccion
 
-        # Intentar primero con Gemini LLM
-        if self._gemini:
-            result = self._gemini.dispatch(text)
-            if result is not None:
-                if result['emotion']:
-                    self._publish(self._pub_emotion, result['emotion'])
-                if result['behavior']:
-                    self._publish(self._pub_behavior, result['behavior'])
-                if result['say']:
-                    self._publish(self._pub_say, result['say'])
-                self.get_logger().info('Gemini -> %s' % result)
-                return
+        # Reglas locales: unico camino sin wake-word y fallback del LLM.
+        self._dispatch_rules(norm)
+
+    def _dispatch_gemini(self, instruction):
+        """Llama a Gemini y publica el resultado. True si tuvo exito."""
+        result = self._gemini.dispatch(instruction)
+        if result is None:
             self.get_logger().warn('Gemini fallo; usando reglas de palabras clave.')
+            return False
+        if result['emotion']:
+            self._publish(self._pub_emotion, result['emotion'])
+        if result['behavior']:
+            self._publish(self._pub_behavior, result['behavior'])
+        if result['say']:
+            self._publish(self._pub_say, result['say'])
+        self.get_logger().info('Gemini -> %s' % result)
+        return True
 
-        # Fallback: palabras clave locales
+    def _dispatch_rules(self, norm):
         for rule in self._rules:
             if any(k in norm for k in rule['keys']):
                 if 'emotion' in rule:
