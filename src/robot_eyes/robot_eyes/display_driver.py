@@ -119,11 +119,13 @@ class GC9A01:
         time.sleep(0.02)
 
     def _get_madctl(self):
-        # MADCTL fijo: la rotacion de 180 se hace por software en
-        # display_image (flip de numpy, coste despreciable). La tabla MADCTL
-        # que habia aqui para 90/180/270 no era una rotacion real (0x48 es
-        # espejo X, no 180) y nunca se habia probado en hardware.
-        return 0x18
+        # Rotacion por HARDWARE via MADCTL (se aplica una vez en el init).
+        # Base 0x18 = ML + BGR. Para 180 grados se anaden los bits MY (0x80) y
+        # MX (0x40) -> 0xD8, que invierte el orden de filas Y columnas (giro de
+        # 180, no un simple espejo). Es la forma correcta: no recalcula el
+        # frame en cada refresco como hacia el flip de numpy (que ademas no
+        # pintaba en hardware).
+        return 0xD8 if self._rotation == 180 else 0x18
 
     def set_window(self, x0, y0, x1, y1):
         self._command(_GC9A01_CASET)
@@ -139,9 +141,6 @@ class GC9A01:
         if image.mode != "RGB":
             image = image.convert("RGB")
         arr = np.array(image, dtype=np.uint8)
-        if self._rotation == 180:
-            # Pantalla montada al reves: girar el frame 180 grados
-            arr = arr[::-1, ::-1]
         r = arr[:,:,0].astype(np.uint16)
         g = arr[:,:,1].astype(np.uint16)
         b = arr[:,:,2].astype(np.uint16)
@@ -213,9 +212,13 @@ class DualDisplayController:
         self._spi_right.max_speed_hz = cfg["spi_speed"]
         self._spi_right.mode = 0
 
+        # bl_pin < 0 (o ausente) = backlight NO controlado por GPIO (cableado a
+        # VCC). Imprescindible para liberar GPIO18 cuando se usa para I2S.
+        bl_pin = cfg["bl_pin"] if cfg["bl_pin"] is not None and cfg["bl_pin"] >= 0 else None
+
         self._left = GC9A01(
             spi=self._spi_left, dc_pin=cfg["dc_pin"], rst_pin=cfg["rst_pin"],
-            cs_pin=cfg["cs_left"], bl_pin=cfg["bl_pin"], gpio=GPIO,
+            cs_pin=cfg["cs_left"], bl_pin=bl_pin, gpio=GPIO,
             rotation=cfg["rotation"],
         )
         self._right = GC9A01(
@@ -229,8 +232,9 @@ class DualDisplayController:
         # would reset the first display's initialized state, leaving it blank.
         GPIO.setup(cfg["dc_pin"],  GPIO.OUT)
         GPIO.setup(cfg["rst_pin"], GPIO.OUT)
-        GPIO.setup(cfg["bl_pin"],  GPIO.OUT)
-        GPIO.output(cfg["bl_pin"],  GPIO.HIGH)
+        if bl_pin is not None:
+            GPIO.setup(bl_pin, GPIO.OUT)
+            GPIO.output(bl_pin, GPIO.HIGH)
         GPIO.output(cfg["rst_pin"], GPIO.HIGH); time.sleep(0.05)
         GPIO.output(cfg["rst_pin"], GPIO.LOW);  time.sleep(0.15)
         GPIO.output(cfg["rst_pin"], GPIO.HIGH); time.sleep(0.15)

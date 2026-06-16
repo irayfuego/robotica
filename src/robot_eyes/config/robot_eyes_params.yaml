@@ -45,7 +45,7 @@ robot_eyes_node:
       spi_bus:    0
       dc_pin:     25
       rst_pin:    27
-      bl_pin:     18
+      bl_pin:     -1         # -1 = backlight a VCC (GPIO18 libre para I2S)
       spi_speed:  40000000   # 40 MHz
       rotation:   180        # pantallas montadas giradas 180 grados
 
