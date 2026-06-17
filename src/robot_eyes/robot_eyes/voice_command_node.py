@@ -77,6 +77,14 @@ from .huskylens_tts_node import McpSseClient
 # ('parpadea dos veces', 'mira a la izquierda') van ANTES que las genericas
 # ('parpadea', 'mira alrededor'). Claves sin tildes (el texto se normaliza).
 DEFAULT_RULES = [
+    # ---- modo de voz (antes que nada: 'voz de furby' no debe casar con otra) -
+    {'keys': ['habla como un furby', 'habla como furby', 'voz de furby',
+              'modo furby', 'pon voz de furby', 'voz furby', 'como un furby'],
+     'voice_mode': 'furby', 'emotion': 'happy', 'say': 'Vale! Hablo como un Furby!'},
+    {'keys': ['habla normal', 'voz normal', 'tu voz normal', 'deja de hablar como furby',
+              'quita el furby', 'quita la voz de furby', 'voz de robot'],
+     'voice_mode': 'normal', 'emotion': 'happy', 'say': 'Vale, vuelvo a mi voz de siempre.'},
+
     # ---- dormir / despertar (antes que 'hola': 'buenos dias' despierta) ----
     {'keys': ['despierta', 'despiertate', 'levantate', 'buenos dias'],
      'emotion': 'neutral', 'behavior': 'wake_up', 'say': 'Buenos dias!'},
@@ -398,6 +406,8 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._pub_emotion  = self.create_publisher(String, '/robot_eyes/emotion',  10)
         self._pub_behavior = self.create_publisher(String, '/robot_eyes/behavior', 10)
         self._pub_say      = self.create_publisher(String, '/robot/say',           10)
+        # Modo de voz del TTS ('normal' | 'furby'), cambiable por voz.
+        self._pub_voice_mode = self.create_publisher(String, '/robot/voice_mode', 10)
 
         # Auto-mute mientras el robot habla. Dos fuentes:
         #  - /robot/say: estimacion al publicar (cubre el hueco mientras Piper
@@ -737,6 +747,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
     def _dispatch_rules(self, norm):
         for rule in self._rules:
             if any(k in norm for k in rule['keys']):
+                # voice_mode primero: el TTS lo aplica antes de procesar el
+                # 'say' de confirmacion (asi la confirmacion ya sale con la voz
+                # nueva).
+                if 'voice_mode' in rule:
+                    self._publish(self._pub_voice_mode, rule['voice_mode'])
                 if 'emotion' in rule:
                     self._publish(self._pub_emotion, rule['emotion'])
                 if 'behavior' in rule:
