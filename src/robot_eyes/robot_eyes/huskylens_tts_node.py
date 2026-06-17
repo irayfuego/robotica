@@ -281,11 +281,16 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         self._queue = queue.Queue(maxsize=16)
         self._counter = 0
         self._running = True
-        self._voice = None   # PiperVoice cargado una vez en el worker
+        self._voice = None        # PiperVoice cargado una vez en el worker
+        self._last_text = ''      # ultima frase dicha (para 'repite')
+        self._aplay_proc = None   # subproceso de aplay en curso (para 'callate')
+        self._vol_db = 0.0        # ajuste de volumen software (dB), por voz
 
         self.create_subscription(String, '/robot/say', self._cb_say, 10)
         # Cambio de voz por voz: 'furby' / 'normal'.
         self.create_subscription(String, '/robot/voice_mode', self._cb_voice_mode, 10)
+        # Control del TTS: 'stop' (callar) | 'repeat' | 'vol_up' | 'vol_down'.
+        self.create_subscription(String, '/robot/tts_control', self._cb_tts_control, 10)
 
         # Los ojos se animan mientras el robot habla: se publica 'speaking' al
         # empezar la reproduccion y 'speaking_stop' al terminar.
@@ -327,6 +332,32 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
                 self._queue.put_nowait(text)
             except queue.Empty:
                 pass
+
+    def _cb_tts_control(self, msg):
+        cmd = msg.data.strip().lower()
+        if cmd == 'stop':
+            # Callar: vaciar la cola pendiente y matar la reproduccion actual.
+            try:
+                while True:
+                    self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            proc = self._aplay_proc
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+            self.get_logger().info('TTS: callar (stop)')
+        elif cmd == 'repeat':
+            if self._last_text:
+                try:
+                    self._queue.put_nowait(self._last_text)
+                except queue.Full:
+                    pass
+        elif cmd == 'vol_up':
+            self._vol_db = min(12.0, self._vol_db + 3.0)
+            self.get_logger().info('TTS volumen: %+.0f dB' % self._vol_db)
+        elif cmd == 'vol_down':
+            self._vol_db = max(-24.0, self._vol_db - 3.0)
+            self.get_logger().info('TTS volumen: %+.0f dB' % self._vol_db)
 
     # -------------------------------------------------------------- worker
     def _open_ssh_master(self):
@@ -384,6 +415,7 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
     def _speak(self, text):
         slot = self._counter % self._slots
         self._counter += 1
+        self._last_text = text   # para el comando de voz 'repite'
         wav = os.path.join(self._tmp, 'robot_say_%d.wav' % slot)
 
         # 1) Piper TTS -> WAV  (voz neuronal). Comun a ambas salidas.
@@ -392,6 +424,10 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         # 1b) Efecto de voz Furby (aguda + acelerada) si esta activo.
         if self._furby:
             self._apply_furby(wav)
+
+        # 1c) Volumen software (ajustable por voz: "mas alto" / "mas bajo").
+        if abs(self._vol_db) > 0.01:
+            self._apply_volume(wav)
 
         # Duracion real para serializar la voz sin solaparla.
         try:
@@ -438,6 +474,22 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
             except OSError:
                 pass
 
+    def _apply_volume(self, wav):
+        """Ajusta el volumen del WAV con sox (gain dB), ajustable por voz."""
+        fx = wav + '.vol.wav'
+        try:
+            subprocess.run(
+                ['sox', wav, fx, 'gain', '%.1f' % self._vol_db],
+                check=True, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=20)
+            os.replace(fx, wav)
+        except Exception as e:
+            self.get_logger().warn('Ajuste de volumen fallo: %s' % e)
+            try:
+                os.remove(fx)
+            except OSError:
+                pass
+
     def _gen_wav(self, text, wav):
         """Genera el WAV con la API de Piper (modelo ya cargado, ~1s) o, si no
         esta disponible, con el subprocess (lento). En modo Furby usa la voz y
@@ -476,10 +528,16 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
 
     def _play_local(self, wav, duration):
         """Reproduce el WAV por el altavoz del Pi (MAX98357A) con aplay.
-        aplay bloquea hasta terminar, asi la voz no se solapa."""
-        subprocess.run(['aplay', '-q', '-D', self._alsa_dev, wav],
-                       check=True, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=duration + 15)
+        Se guarda el subproceso para poder matarlo con el comando 'callate'."""
+        self._aplay_proc = subprocess.Popen(
+            ['aplay', '-q', '-D', self._alsa_dev, wav],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self._aplay_proc.wait(timeout=duration + 15)
+        except subprocess.TimeoutExpired:
+            self._aplay_proc.kill()
+        finally:
+            self._aplay_proc = None
 
     def _play_husky(self, wav, slot, duration):
         """Camino HuskyLens (fallback): WAV -> MP3 -> ssh cat -> play_music."""

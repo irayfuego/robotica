@@ -35,6 +35,7 @@ Parameters (ver robot_eyes_params.yaml, seccion voice_command_node).
                   Preferir variable de entorno: no ponerla en el YAML (es publico).
 """
 
+import datetime
 import json
 import os
 import queue
@@ -77,18 +78,45 @@ from .huskylens_tts_node import McpSseClient
 # ('parpadea dos veces', 'mira a la izquierda') van ANTES que las genericas
 # ('parpadea', 'mira alrededor'). Claves sin tildes (el texto se normaliza).
 DEFAULT_RULES = [
-    # ---- modo de voz (antes que nada: 'voz de furby' no debe casar con otra) -
-    # "furby" es palabra inglesa: Vosk-es la transcribe mal y variable
-    # ("four vi", "sur vi"...). Incluimos esas variantes + disparadores en
-    # espanol fiables ("voz de peluche", "voz de juguete", "voz aguda").
-    {'keys': ['furby', 'furbi', 'four vi', 'sur vi', 'fur vi', 'for vi',
-              'four bi', 'sur bi', 'forbi', 'surbi', 'como un four', 'como un sur',
-              'voz de peluche', 'voz de juguete', 'voz graciosa', 'voz aguda',
-              'habla gracioso', 'voz de muneco', 'voz chistosa', 'voz de bebe'],
-     'voice_mode': 'furby', 'emotion': 'happy', 'say': 'Vale! Hablo como un Furby!'},
-    {'keys': ['habla normal', 'voz normal', 'tu voz normal', 'deja de hablar como furby',
-              'quita el furby', 'quita la voz de furby', 'voz de robot'],
+    # ---- modo de voz (antes que nada para que no case con otra regla) -------
+    # En espanol "furby" se pronuncia "furbi", que Vosk-es SI transcribe bien.
+    # Se mantienen variantes fonericas ("four vi", "sur vi") y un par de
+    # disparadores en espanol fiables ("voz de juguete", "voz aguda").
+    {'keys': ['furbi', 'voz de furbi', 'modo furbi', 'habla como un furbi',
+              'como un furbi', 'furby', 'voz de furby',
+              'voz de juguete', 'voz aguda', 'four vi', 'sur vi', 'fur vi'],
+     'voice_mode': 'furby', 'emotion': 'happy', 'say': 'Vale! Hablo como un Furbi!'},
+    {'keys': ['habla normal', 'voz normal', 'tu voz normal', 'deja de hablar como furbi',
+              'quita el furbi', 'quita la voz de furbi', 'voz de robot'],
      'voice_mode': 'normal', 'emotion': 'happy', 'say': 'Vale, vuelvo a mi voz de siempre.'},
+
+    # ---- utilidades del sistema (offline; 'action' ejecuta logica) ---------
+    {'keys': ['que hora es', 'dime la hora', 'la hora que es', 'que hora'],
+     'action': 'say_time'},
+    {'keys': ['que dia es', 'que fecha es', 'el dia de hoy', 'que fecha', 'que dia'],
+     'action': 'say_date'},
+    {'keys': ['cuenta atras', 'cuenta hasta diez', 'haz una cuenta atras'],
+     'action': 'countdown'},
+
+    # ---- control del propio robot (offline; 'action') ----------------------
+    {'keys': ['callate', 'silencio', 'calla', 'para de hablar', 'cierra la boca'],
+     'action': 'tts_stop'},
+    {'keys': ['repite', 'otra vez', 'que has dicho', 'repitelo'],
+     'action': 'tts_repeat'},
+    {'keys': ['mas alto', 'mas fuerte', 'sube el volumen', 'habla mas alto'],
+     'action': 'vol_up'},
+    {'keys': ['mas bajo', 'mas bajito', 'baja el volumen', 'habla mas bajo'],
+     'action': 'vol_down'},
+
+    # ---- reacciones expresivas ---------------------------------------------
+    {'keys': ['asustate', 'que susto', 'da un susto'],
+     'emotion': 'surprised', 'say': 'Ah!'},
+    {'keys': ['riete', 'jajaja', 'una risa', 'haz una risa'],
+     'emotion': 'happy', 'say': 'Ja, ja, ja!'},
+    {'keys': ['haz el tonto', 'haz una tonteria', 'una tonteria', 'haz el ridiculo'],
+     'behavior': 'dizzy', 'say': 'Bla bla bla, soy un robot tontorron!'},
+    {'keys': ['finge que duermes', 'haz como que duermes', 'ronca', 'hazte el dormido'],
+     'emotion': 'sleeping', 'say': 'Zzz... zzz...'},
 
     # ---- dormir / despertar (antes que 'hola': 'buenos dias' despierta) ----
     {'keys': ['despierta', 'despiertate', 'levantate', 'buenos dias'],
@@ -413,6 +441,8 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._pub_say      = self.create_publisher(String, '/robot/say',           10)
         # Modo de voz del TTS ('normal' | 'furby'), cambiable por voz.
         self._pub_voice_mode = self.create_publisher(String, '/robot/voice_mode', 10)
+        # Control del TTS: 'stop' | 'repeat' | 'vol_up' | 'vol_down'.
+        self._pub_tts_ctrl = self.create_publisher(String, '/robot/tts_control', 10)
 
         # Auto-mute mientras el robot habla. Dos fuentes:
         #  - /robot/say: estimacion al publicar (cubre el hueco mientras Piper
@@ -752,6 +782,9 @@ class VoiceCommandNode(Node if HAS_ROS else object):
     def _dispatch_rules(self, norm):
         for rule in self._rules:
             if any(k in norm for k in rule['keys']):
+                # 'action' = logica especial (hora, fecha, callar, volumen...).
+                if 'action' in rule:
+                    self._run_action(rule['action'])
                 # voice_mode primero: el TTS lo aplica antes de procesar el
                 # 'say' de confirmacion (asi la confirmacion ya sale con la voz
                 # nueva).
@@ -767,6 +800,49 @@ class VoiceCommandNode(Node if HAS_ROS else object):
                     'Comando reconocido (reglas) -> %s' % {k: v for k, v in rule.items()
                                                            if k != 'keys'})
                 return
+
+    # ------------------------------------------------------------- acciones
+    _DIAS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado',
+             'domingo']
+    _MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+              'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+    def _run_action(self, action):
+        try:
+            getattr(self, '_act_' + action)()
+        except Exception as e:
+            self.get_logger().warn('Accion %s fallo: %s' % (action, e))
+
+    def _act_say_time(self):
+        now = datetime.datetime.now()
+        if now.minute == 0:
+            txt = 'Son las %d en punto.' % now.hour
+        else:
+            txt = 'Son las %d y %d.' % (now.hour, now.minute)
+        self._publish(self._pub_say, txt)
+
+    def _act_say_date(self):
+        now = datetime.datetime.now()
+        txt = 'Hoy es %s, %d de %s.' % (self._DIAS[now.weekday()], now.day,
+                                        self._MESES[now.month - 1])
+        self._publish(self._pub_say, txt)
+
+    def _act_countdown(self):
+        self._publish(self._pub_say,
+                      'Diez. Nueve. Ocho. Siete. Seis. Cinco. '
+                      'Cuatro. Tres. Dos. Uno. Ya!')
+
+    def _act_tts_stop(self):
+        self._publish(self._pub_tts_ctrl, 'stop')
+
+    def _act_tts_repeat(self):
+        self._publish(self._pub_tts_ctrl, 'repeat')
+
+    def _act_vol_up(self):
+        self._publish(self._pub_tts_ctrl, 'vol_up')
+
+    def _act_vol_down(self):
+        self._publish(self._pub_tts_ctrl, 'vol_down')
 
     def _publish(self, pub, value):
         m = String(); m.data = value
