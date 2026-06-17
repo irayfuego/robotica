@@ -78,8 +78,13 @@ from .huskylens_tts_node import McpSseClient
 # ('parpadea', 'mira alrededor'). Claves sin tildes (el texto se normaliza).
 DEFAULT_RULES = [
     # ---- modo de voz (antes que nada: 'voz de furby' no debe casar con otra) -
-    {'keys': ['habla como un furby', 'habla como furby', 'voz de furby',
-              'modo furby', 'pon voz de furby', 'voz furby', 'como un furby'],
+    # "furby" es palabra inglesa: Vosk-es la transcribe mal y variable
+    # ("four vi", "sur vi"...). Incluimos esas variantes + disparadores en
+    # espanol fiables ("voz de peluche", "voz de juguete", "voz aguda").
+    {'keys': ['furby', 'furbi', 'four vi', 'sur vi', 'fur vi', 'for vi',
+              'four bi', 'sur bi', 'forbi', 'surbi', 'como un four', 'como un sur',
+              'voz de peluche', 'voz de juguete', 'voz graciosa', 'voz aguda',
+              'habla gracioso', 'voz de muneco', 'voz chistosa', 'voz de bebe'],
      'voice_mode': 'furby', 'emotion': 'happy', 'say': 'Vale! Hablo como un Furby!'},
     {'keys': ['habla normal', 'voz normal', 'tu voz normal', 'deja de hablar como furby',
               'quita el furby', 'quita la voz de furby', 'voz de robot'],
