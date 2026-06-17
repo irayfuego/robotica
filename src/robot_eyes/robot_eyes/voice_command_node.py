@@ -43,6 +43,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+try:
+    import audioop                       # stdlib (Python <= 3.12); resample/mono
+    HAS_AUDIOOP = True
+except ImportError:
+    HAS_AUDIOOP = False
 import wave
 
 try:
@@ -282,6 +288,13 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         # NO poner el valor real en el YAML (el repo es publico).
         self.declare_parameter('gemini_api_key',   '')
         self.declare_parameter('gemini_model',     'gemini-2.5-flash-lite')
+        # Captura de audio: 'local' = microfono INMP441 por I2S con arecord
+        # (sin latencia de red); 'huskylens' = micro de la camara por su MCP.
+        self.declare_parameter('audio_source',     'local')
+        self.declare_parameter('alsa_device',      'plughw:1,0')
+        self.declare_parameter('mic_gain_db',      10.0)   # el INMP441 da nivel bajo
+        self.declare_parameter('capture_rate',     48000)  # Hz nativos de la tarjeta I2S
+        self.declare_parameter('capture_channels', 2)
 
         self._host       = self.get_parameter('husky_host').value
         port             = int(self.get_parameter('husky_mcp_port').value)
@@ -297,6 +310,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._tts_speed  = int(self.get_parameter('tts_speed').value)
         self._tmp        = self.get_parameter('tmp_dir').value.rstrip('/')
         self._enabled    = bool(self.get_parameter('enabled').value)
+        self._source     = self.get_parameter('audio_source').value.strip().lower()
+        self._alsa_dev   = self.get_parameter('alsa_device').value
+        self._mic_gain   = float(self.get_parameter('mic_gain_db').value)
+        self._cap_rate   = int(self.get_parameter('capture_rate').value)
+        self._cap_ch     = int(self.get_parameter('capture_channels').value)
 
         # Opciones SSH con conexion maestra persistente (ControlMaster): evita
         # el handshake en cada transferencia. La WiFi de la HuskyLens es lenta
@@ -332,8 +350,15 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._pub_behavior = self.create_publisher(String, '/robot_eyes/behavior', 10)
         self._pub_say      = self.create_publisher(String, '/robot/say',           10)
 
-        # Auto-mute mientras el robot habla
+        # Auto-mute mientras el robot habla. Dos fuentes:
+        #  - /robot/say: estimacion al publicar (cubre el hueco mientras Piper
+        #    genera el audio, antes de que empiece a sonar).
+        #  - /robot_eyes/behavior 'speaking'/'speaking_stop': el TTS las publica
+        #    al empezar y terminar el audio REAL -> mute exacto, sin depender de
+        #    estimaciones (evita que el micro capte el final de la propia voz).
         self.create_subscription(String, '/robot/say', self._cb_say_seen, 10)
+        self.create_subscription(String, '/robot_eyes/behavior',
+                                 self._cb_behavior_seen, 10)
 
         if not HAS_VOSK:
             self.get_logger().error(
@@ -355,9 +380,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         if self._enabled:
             threading.Thread(target=self._record_loop, daemon=True).start()
             threading.Thread(target=self._worker_loop, daemon=True).start()
+            mic = ('INMP441 local %s' % self._alsa_dev if self._source == 'local'
+                   else 'HuskyLens %s' % self._host)
             self.get_logger().info(
-                'Comandos de voz ACTIVOS  host=%s  ventana=%ds  wake=%r  nlu=%s'
-                % (self._host, self._window, self._wake or '(siempre)',
+                'Comandos de voz ACTIVOS  mic=%s  ventana=%ds  wake=%r  nlu=%s'
+                % (mic, self._window, self._wake or '(siempre)',
                    'gemini' if self._gemini else 'reglas'))
         else:
             self.get_logger().info('Comandos de voz deshabilitados (enabled=false).')
@@ -371,11 +398,100 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         dur = words / (self._tts_speed / 60.0)
         self._mute_until = time.time() + dur + self._mute_marg
 
+    def _cb_behavior_seen(self, msg):
+        b = msg.data.strip()
+        if b == 'speaking':
+            # El robot empieza a hablar: mute hasta que avise que termina.
+            self._mute_until = time.time() + 3600.0
+        elif b == 'speaking_stop':
+            # Termino el audio: deja un margen anti-eco/reverberacion.
+            self._mute_until = time.time() + self._mute_marg
+
     def _muted(self):
         return time.time() < self._mute_until
 
     # ------------------------------------------------------------ grabacion
     def _record_loop(self):
+        if self._source == 'local':
+            self._record_loop_local()
+        else:
+            self._record_loop_husky()
+
+    def _record_loop_local(self):
+        """Captura del INMP441 con reconocimiento en STREAMING: un unico arecord
+        continuo alimenta a Vosk chunk a chunk; Vosk detecta el fin de frase
+        (endpointing) y devuelve el texto en cuanto dejas de hablar -> minima
+        latencia, sin ventanas fijas. Mantener el stream I2S siempre abierto
+        ademas evita los 'click' del MAX98357A. Durante el TTS se descarta el
+        audio (auto-mute) para no oirse a si mismo."""
+        if not HAS_AUDIOOP:
+            self.get_logger().error(
+                'audioop no disponible (Python >= 3.13?). Captura local imposible; '
+                'usa audio_source: huskylens o instala audioop-lts.')
+            return
+        cmd = ['arecord', '-q', '-D', self._alsa_dev, '-f', 'S32_LE',
+               '-r', str(self._cap_rate), '-c', str(self._cap_ch), '-t', 'raw']
+        gain = 10.0 ** (self._mic_gain / 20.0)
+        while self._running:
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL)
+            except Exception as e:
+                self.get_logger().warn('arecord no arranco: %s' % e)
+                time.sleep(1.0)
+                continue
+            rec = KaldiRecognizer(self._model, self._rate)
+            rec.SetWords(False)
+            rs_state = None          # estado del resample (streaming)
+            partial_on = False       # ya se ha senalado 'listening' esta frase
+            try:
+                while self._running:
+                    chunk = proc.stdout.read(8192)
+                    if not chunk:
+                        break
+                    if self._muted():
+                        # Reinicia el reconocedor para no mezclar la voz del
+                        # robot con la siguiente frase del usuario.
+                        if partial_on or rs_state is not None:
+                            rec = KaldiRecognizer(self._model, self._rate)
+                            rec.SetWords(False)
+                            rs_state = None
+                            partial_on = False
+                        continue
+                    # 48 kHz S32 estereo -> 16 kHz mono 16-bit con ganancia.
+                    # L/R del INMP441 a GND -> canal izquierdo.
+                    mono = audioop.tomono(chunk, 4, 1, 0)
+                    mono = audioop.lin2lin(mono, 4, 2)
+                    mono, rs_state = audioop.ratecv(mono, 2, 1, self._cap_rate,
+                                                    self._rate, rs_state)
+                    if gain != 1.0:
+                        mono = audioop.mul(mono, 2, gain)
+                    if rec.AcceptWaveform(mono):
+                        text = json.loads(rec.Result()).get('text', '').strip()
+                        partial_on = False
+                        if text:
+                            try:
+                                self._queue.put_nowait(text)
+                            except queue.Full:
+                                pass
+                    elif not partial_on:
+                        p = json.loads(rec.PartialResult()).get('partial', '').strip()
+                        if p:
+                            # Feedback inmediato: ojos atentos al detectar voz.
+                            partial_on = True
+                            self._publish(self._pub_behavior, 'listening')
+            except Exception as e:
+                self.get_logger().warn('captura local fallo: %s' % e)
+            finally:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            if self._running:
+                time.sleep(0.5)   # reintenta el stream si arecord murio
+
+    def _record_loop_husky(self):
         if not self._mcp.connect():
             self.get_logger().warn('No se pudo conectar al MCP para grabar; reintentando...')
         self._open_ssh_master()
@@ -412,13 +528,26 @@ class VoiceCommandNode(Node if HAS_ROS else object):
     def _worker_loop(self):
         while self._running:
             try:
-                slot = self._queue.get(timeout=0.5)
+                item = self._queue.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
-                self._process(slot)
+                if self._source == 'local':
+                    self._handle_text(item)     # item = texto ya transcrito
+                else:
+                    self._process_husky(item)   # item = slot (descarga + Vosk)
             except Exception as e:
                 self.get_logger().warn('Procesado de voz fallo: %s' % e)
+
+    def _handle_text(self, text):
+        """Publica y despacha un texto ya reconocido (camino local streaming).
+        El dispatch corre aqui, en el worker, para no bloquear la captura."""
+        if not text:
+            return
+        self.get_logger().info('Voz: "%s"' % text)
+        m = String(); m.data = text
+        self._pub_raw.publish(m)
+        self._dispatch(text)
 
     def _open_ssh_master(self):
         """Abre (o reabre) la conexion SSH maestra reusable hacia la HuskyLens."""
@@ -429,7 +558,7 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         except Exception:
             pass
 
-    def _process(self, slot):
+    def _process_husky(self, slot):
         base = 'voice_rec_%d.mp3' % slot
         mp3 = os.path.join(self._tmp, base)
         wav = os.path.join(self._tmp, 'voice_rec_%d.wav' % slot)
@@ -458,7 +587,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
             ['sox', mp3, '-r', str(self._rate), '-c', '1', '-b', '16', wav],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=20)
+        self._finish(wav)
 
+    def _finish(self, wav):
+        """VAD -> feedback visual -> Vosk -> NLU. Recibe un WAV 16k mono 16-bit
+        (comun a la captura local y a la de la HuskyLens)."""
         # VAD por energia: descarta silencio
         if not self._has_speech(wav):
             self._cleanup(wav)

@@ -80,15 +80,19 @@ huskylens_tts_node:
     husky_mcp_port:      3000                   # puerto del MCP server del firmware
     husky_ssh_user:      "root"                 # SSH root sin password ya configurado
     husky_audio_dir:     "/opt/user/mtp/audio"  # carpeta de audio en la HuskyLens
+    # Salida de audio. 'local' = altavoz propio del Pi (MAX98357A por I2S) con
+    # aplay, sin latencia de red. 'huskylens' = altavoz de la camara (MCP).
+    audio_sink:          "local"
+    alsa_device:         "plughw:1,0"   # tarjeta I2S (sndrpigooglevoi = card 1)
     # Piper TTS (voz neuronal). Modelo descargado en /home/mimavi/piper-voices/
     # Otras voces disponibles en: https://huggingface.co/rhasspy/piper-voices
     piper_model:         "/home/mimavi/piper-voices/es_ES-davefx-medium.onnx"
     piper_binary:        ""          # vacio = python3 -m piper (instalado con pip)
     piper_length_scale:  1.0         # velocidad: 0.8=rapido 1.0=normal 1.2=lento
     tts_speed:           130         # solo para estimar duracion de mute en voice_command_node
-    volume:              90          # volumen de reproduccion 0-100
+    volume:              90          # volumen 0-100 (solo modo huskylens; en local: pin GAIN del amp)
     tmp_dir:             "/tmp"      # carpeta temporal en el Pi
-    ring_slots:          4           # nombres MP3 rotativos (anti-pisado)
+    ring_slots:          4           # nombres de fichero rotativos (anti-pisado)
 
 # Comandos de voz en lenguaje natural, siempre activos.
 # Microfono de la HuskyLens (grabado via su MCP) + Vosk offline en el Pi.
@@ -101,9 +105,16 @@ voice_command_node:
     husky_ssh_user:    "root"                 # SSH root sin password ya configurado
     husky_audio_dir:   "/opt/user/mtp/audio"  # carpeta de audio en la HuskyLens
     model_path:        "/home/mimavi/vosk-model-es"  # modelo Vosk espanol
+    # Captura: 'local' = microfono INMP441 propio del Pi por I2S (arecord, sin
+    # latencia de red); 'huskylens' = micro de la camara via su MCP (fallback).
+    audio_source:      "local"
+    alsa_device:       "plughw:1,0"            # tarjeta I2S (sndrpigooglevoi = card 1)
+    mic_gain_db:       10.0                     # el INMP441 entrega nivel bajo
+    capture_rate:      48000                    # Hz nativos de la tarjeta I2S
+    capture_channels:  2
     window_sec:        3                       # duracion de cada ventana (frases cortas caben)
-    rec_margin:        3.2                     # seg extra para que el firmware cierre el MP3
-                                               # (medido ~2.9s; menos margen ABORTA la grabacion)
+    rec_margin:        3.2                     # solo modo huskylens: seg extra para que el
+                                               # firmware cierre el MP3 (en local no aplica)
     sample_rate:       16000                   # Hz (mono) que espera Vosk
     vad_rms_threshold: 0.010                   # umbral de energia para detectar voz
     wake_word:         "robot"                 # NLU hibrido: sin esta palabra solo
