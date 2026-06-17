@@ -175,19 +175,21 @@ def normalize(text):
 
 
 # --------------------------------------------------------------------------- #
-#  Cliente Gemini 2.0 Flash (solo stdlib).                                     #
-#  Interpreta la transcripcion de voz y devuelve JSON con emotion/behavior/say #
+#  Cliente Gemini (solo stdlib). Interpreta la transcripcion de voz y devuelve #
+#  {emotion, intensity, behavior, say}. Opcionalmente usa Google Search para    #
+#  responder preguntas del mundo real (tiempo, noticias, datos actuales).       #
 # --------------------------------------------------------------------------- #
 class GeminiClient:
 
     _URL = ('https://generativelanguage.googleapis.com/v1beta/models/'
             '%s:generateContent?key=%s')
 
-    _SYSTEM = (
+    _BASE_SYSTEM = (
         'Eres el cerebro de un robot amigable con ojos animados. '
         'Recibes lo que el usuario acaba de decir por voz (transcripcion Vosk, '
         'puede tener errores menores) y decides como reacciona el robot. '
-        'Responde SIEMPRE con JSON valido con exactamente cuatro campos:\n'
+        'Responde UNICAMENTE con un objeto JSON (sin texto antes ni despues, '
+        'sin marcas de codigo) con exactamente cuatro campos:\n'
         '- emotion: una de [neutral, happy, sad, angry, surprised, confused, '
         'suspicious, tired, love, sleeping] o cadena vacia si no cambia.\n'
         '- intensity: numero entre 0.0 y 1.0, lo intensa que es la emocion '
@@ -196,37 +198,58 @@ class GeminiClient:
         'look_around, look_left, look_right, look_up, look_down, look_center, '
         'scan, thinking, dizzy, roll_eyes, notice, dilate, wake_up] '
         'o cadena vacia.\n'
-        '- say: frase corta en espanol que dira el robot en voz alta, '
-        'o cadena vacia si no tiene nada que decir.\n'
-        'El robot es simpatico, curioso y expresivo. Responde de forma natural '
-        'y breve. Habla siempre en espanol.'
+        '- say: lo que dira el robot EN VOZ ALTA, en espanol, BREVE (1-2 frases).'
     )
 
-    def __init__(self, api_key, model='gemini-2.5-flash-lite', logger=None):
+    _SEARCH_NOTE = (
+        '\nPuedes usar la busqueda de Google SOLO cuando te pregunten por datos '
+        'reales o actuales (tiempo, noticias, hechos, fechas, deportes, precios). '
+        'Para conversacion normal NO busques. Si buscas, resume la respuesta en '
+        '"say" en una o dos frases cortas, sin enlaces ni citas.'
+    )
+
+    _PERSONA = (
+        '\nEl robot es simpatico, curioso y expresivo. Habla siempre en espanol.'
+    )
+
+    def __init__(self, api_key, model='gemini-2.5-flash-lite',
+                 grounding=False, logger=None):
         self._key = api_key
         self._model = model
+        self._grounding = grounding
         self._log = logger
+        self._system = self._BASE_SYSTEM
+        if grounding:
+            self._system += self._SEARCH_NOTE
+        self._system += self._PERSONA
 
-    def dispatch(self, text, timeout=8.0):
-        """Llama a Gemini y devuelve dict {emotion, behavior, say}, o None si falla."""
+    def dispatch(self, text, timeout=None):
+        """Llama a Gemini y devuelve {emotion, intensity, behavior, say}, o None.
+        Con grounding la busqueda web tarda mas (~8s), de ahi el timeout mayor."""
+        if timeout is None:
+            timeout = 15.0 if self._grounding else 8.0
+        gen_cfg = {'temperature': 0}
         payload = {
-            'systemInstruction': {'parts': [{'text': self._SYSTEM}]},
+            'systemInstruction': {'parts': [{'text': self._system}]},
             'contents': [{'role': 'user', 'parts': [{'text': text}]}],
-            'generationConfig': {
-                'temperature': 0,
-                'responseMimeType': 'application/json',
-                'responseSchema': {
-                    'type': 'OBJECT',
-                    'properties': {
-                        'emotion':   {'type': 'STRING'},
-                        'intensity': {'type': 'NUMBER'},
-                        'behavior':  {'type': 'STRING'},
-                        'say':       {'type': 'STRING'},
-                    },
-                    'required': ['emotion', 'intensity', 'behavior', 'say'],
-                },
-            },
+            'generationConfig': gen_cfg,
         }
+        if self._grounding:
+            # google_search NO es compatible con responseSchema: pedimos el JSON
+            # por el prompt y lo extraemos a mano.
+            payload['tools'] = [{'google_search': {}}]
+        else:
+            gen_cfg['responseMimeType'] = 'application/json'
+            gen_cfg['responseSchema'] = {
+                'type': 'OBJECT',
+                'properties': {
+                    'emotion':   {'type': 'STRING'},
+                    'intensity': {'type': 'NUMBER'},
+                    'behavior':  {'type': 'STRING'},
+                    'say':       {'type': 'STRING'},
+                },
+                'required': ['emotion', 'intensity', 'behavior', 'say'],
+            }
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
             self._URL % (self._model, self._key), data=data,
@@ -243,23 +266,43 @@ class GeminiClient:
             if self._log:
                 self._log('Gemini error: %s' % e)
             return None
+        return self._parse(body)
+
+    def _parse(self, body):
+        """Extrae el JSON de la respuesta. Con grounding puede venir texto
+        alrededor (o solo prosa): si no hay JSON, se usa el texto como 'say'."""
         try:
-            raw = body['candidates'][0]['content']['parts'][0]['text']
-            result = json.loads(raw)
+            parts = body['candidates'][0]['content']['parts']
+            txt = ''.join(p.get('text', '') for p in parts
+                          if isinstance(p, dict)).strip()
+        except Exception as e:
+            if self._log:
+                self._log('Gemini sin texto: %s  body=%s' % (e, str(body)[:300]))
+            return None
+        if not txt:
+            return None
+        # Intentar extraer un objeto JSON del texto.
+        obj = None
+        if '{' in txt and '}' in txt:
+            frag = txt[txt.find('{'):txt.rfind('}') + 1]
             try:
-                intensity = max(0.0, min(1.0, float(result.get('intensity', 1.0))))
+                obj = json.loads(frag)
+            except Exception:
+                obj = None
+        if isinstance(obj, dict):
+            try:
+                intensity = max(0.0, min(1.0, float(obj.get('intensity', 1.0))))
             except (TypeError, ValueError):
                 intensity = 1.0
             return {
-                'emotion':   str(result.get('emotion',  '')).strip(),
+                'emotion':   str(obj.get('emotion',  '')).strip(),
                 'intensity': intensity,
-                'behavior':  str(result.get('behavior', '')).strip(),
-                'say':       str(result.get('say',      '')).strip(),
+                'behavior':  str(obj.get('behavior', '')).strip(),
+                'say':       str(obj.get('say',      '')).strip(),
             }
-        except Exception as e:
-            if self._log:
-                self._log('Gemini parse error: %s  body=%s' % (e, str(body)[:300]))
-            return None
+        # Fallback: el modelo respondio en prosa (tipico tras una busqueda).
+        say = txt.replace('`', '').strip()
+        return {'emotion': '', 'intensity': 1.0, 'behavior': '', 'say': say}
 
 
 # --------------------------------------------------------------------------- #
@@ -288,6 +331,9 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         # NO poner el valor real en el YAML (el repo es publico).
         self.declare_parameter('gemini_api_key',   '')
         self.declare_parameter('gemini_model',     'gemini-2.5-flash-lite')
+        # Busqueda de Google (grounding): permite responder datos reales
+        # (tiempo, noticias...). Gratis hasta 1500 consultas/dia.
+        self.declare_parameter('gemini_grounding', True)
         # Captura de audio: 'local' = microfono INMP441 por I2S con arecord
         # (sin latencia de red); 'huskylens' = micro de la camara por su MCP.
         self.declare_parameter('audio_source',     'local')
@@ -331,10 +377,13 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         api_key = (self.get_parameter('gemini_api_key').value
                    or os.environ.get('GEMINI_API_KEY', ''))
         gemini_model = self.get_parameter('gemini_model').value
+        grounding = bool(self.get_parameter('gemini_grounding').value)
         if api_key:
             self._gemini = GeminiClient(api_key, model=gemini_model,
+                                        grounding=grounding,
                                         logger=self.get_logger().warn)
-            self.get_logger().info('NLU: Gemini activo  modelo=%s.' % gemini_model)
+            self.get_logger().info('NLU: Gemini activo  modelo=%s  busqueda=%s.'
+                                   % (gemini_model, 'si' if grounding else 'no'))
         else:
             self._gemini = None
             self.get_logger().info(

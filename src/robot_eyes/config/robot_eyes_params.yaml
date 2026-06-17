@@ -136,3 +136,7 @@ voice_command_node:
     #   gemini-2.5-flash
     #   gemini-3.1-flash-lite
     gemini_model:      "gemini-2.5-flash-lite"
+    # Busqueda de Google (grounding): el robot puede responder datos reales
+    # (tiempo, noticias, hechos actuales). Gratis hasta 1500 consultas/dia;
+    # despues 35$/1000. false = solo conocimiento del modelo (sin internet).
+    gemini_grounding:  true
