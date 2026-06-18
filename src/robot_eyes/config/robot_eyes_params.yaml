@@ -93,7 +93,7 @@ huskylens_tts_node:
     # Cadena COMPLETA de efectos sox. Sube el numero tras 'pitch' para mas agudo
     # (650 -> 700/750). reverb 18 ... = resonancia de cavidad SIN perder la voz
     # (NO usar 'reverb -w': wet-only deja la voz casi muda, RMS 0.03 vs 0.22).
-    furby_sox_fx:        "pitch 650 highpass 350 lowpass 8000 equalizer 2500 1.5q 8 reverb 18 50 12 0 0 0 compand 0.3,1 6:-70,-60,-20 -5 -90 0.2 gain -3"
+    furby_sox_fx:        "pitch 720 highpass 350 lowpass 8000 equalizer 2500 1.5q 8 reverb 18 50 12 0 0 0 compand 0.3,1 6:-70,-60,-20 -5 -90 0.2 gain -3"
     # Piper TTS (voz neuronal). Modelo descargado en /home/mimavi/piper-voices/
     # Otras voces disponibles en: https://huggingface.co/rhasspy/piper-voices
     piper_model:         "/home/mimavi/piper-voices/es_ES-davefx-medium.onnx"
