@@ -16,6 +16,11 @@ CH_GAZE       = frozenset({'gaze'})
 CH_LIDS       = frozenset({'lids'})
 CH_PUPIL      = frozenset({'pupil'})
 CH_GAZE_PUPIL = frozenset({'gaze', 'pupil'})
+# "Pensar con el LLM": expresion propia y reconocible. Controla mirada, iris,
+# pupila, parpados y borra el ceño (squint/eyebrow/lid_tilt) -> no hereda el
+# rojo ni la "V" de una emocion 'angry' previa, y se distingue de cualquier
+# emocion mientras espera al LLM.
+CH_THINK      = frozenset({'gaze', 'iris', 'squint', 'eyebrow', 'lids', 'pupil'})
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +33,18 @@ def _open(gaze_x=0.0, gaze_y=0.0, pupil=0.5, iris_color=(60, 120, 200)) -> EyeSt
         upper_lid=1.0, lower_lid=0.0,
         pupil_size=pupil, iris_color=iris_color,
         squint=0.0, eyebrow=0.0,
+    )
+
+
+def _thinking(gaze_x=0.0, gaze_y=0.0) -> EyeState:
+    """Expresion de 'pensando con el LLM': parpados algo entornados, ceja
+    ligeramente arqueada, pupila algo contraida e iris cian. Lectura clara de
+    'procesando', distinta de cualquier emocion (ninguna usa cian)."""
+    return EyeState(
+        gaze_x=gaze_x, gaze_y=gaze_y,
+        upper_lid=0.78, lower_lid=0.12,
+        pupil_size=0.42, iris_color=(40, 180, 190),
+        squint=0.0, eyebrow=0.3, lid_tilt=0.0,
     )
 
 
@@ -357,22 +374,24 @@ class BehaviorLibrary:
     @staticmethod
     def thinking() -> Animation:
         kf = [
-            Keyframe(_open(gaze_x=0.5, gaze_y=-0.4), 0.25, hold=0.8),
-            Keyframe(_open(gaze_x=0.2, gaze_y=-0.3), 0.3,  hold=0.4),
-            Keyframe(_open(), 0.4),
+            Keyframe(_thinking(gaze_x=0.5, gaze_y=-0.4), 0.25, hold=0.8),
+            Keyframe(_thinking(gaze_x=0.2, gaze_y=-0.3), 0.3,  hold=0.4),
+            Keyframe(_thinking(), 0.4),
         ]
-        return Animation("thinking", left_keyframes=kf, channels=CH_GAZE)
+        return Animation("thinking", left_keyframes=kf, channels=CH_THINK)
 
     @staticmethod
     def thinking_loop() -> Animation:
-        """Looping 'pondering' gaze for while the robot waits for the LLM.
+        """Looping 'pondering' expression while the robot waits for the LLM:
+        narrowed lids, raised brow, contracted pupil, cyan iris and gaze
+        drifting up-sideways -> reads clearly as 'thinking', not an emotion.
         Cancelled via engine.cancel_if('thinking_loop') or by the next anim."""
         kf = [
-            Keyframe(_open(gaze_x=0.5,  gaze_y=-0.4), 0.30, hold=0.7),
-            Keyframe(_open(gaze_x=0.25, gaze_y=-0.45), 0.35, hold=0.5),
-            Keyframe(_open(gaze_x=0.55, gaze_y=-0.25), 0.35, hold=0.6),
+            Keyframe(_thinking(gaze_x=0.5,  gaze_y=-0.4),  0.30, hold=0.7),
+            Keyframe(_thinking(gaze_x=0.25, gaze_y=-0.45), 0.35, hold=0.5),
+            Keyframe(_thinking(gaze_x=0.55, gaze_y=-0.25), 0.35, hold=0.6),
         ]
-        return Animation("thinking_loop", left_keyframes=kf, channels=CH_GAZE,
+        return Animation("thinking_loop", left_keyframes=kf, channels=CH_THINK,
                          loop=True)
 
     @staticmethod

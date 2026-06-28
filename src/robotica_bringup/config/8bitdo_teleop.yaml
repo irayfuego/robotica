@@ -1,4 +1,4 @@
-### 8bitdo_teleop.yaml — Teleop con mando 8BitDo Ultimate 2C (modo Android, Bluetooth)
+### 8bitdo_teleop.yaml — Teleop con mando 8BitDo Ultimate 2C (AJUSTADO a dongle 2.4G / XInput 2026-06-28; antes Android/BT)
 #
 # Ejes (joy_node SDL, modo Android):
 #   0 = Left stick X  (izquierda=-1, derecha=+1)
@@ -23,27 +23,27 @@ teleop_twist_joy_node:
 
     # Deadman: mantener RB (botón 7) pulsado para mover el robot
     require_enable_button: true
-    enable_button: 7          # RB — botón de seguridad (deadman)
-    enable_turbo_button: 6    # LB — velocidad máxima mientras se mantiene
+    enable_button: 5          # RB — botón de seguridad (deadman)
+    enable_turbo_button: 4    # LB — velocidad máxima mientras se mantiene
 
     # Ejes lineales (robot Mecanum: X=adelante/atrás, Y=lateral)
     axis_linear:
       x: 1       # Left stick Y → adelante/atrás
       y: 0       # Left stick X → deslizamiento lateral (mecanum)
     scale_linear:
-      x: -0.4    # Negativo: eje arriba=-1, queremos +v hacia adelante
+      x: 0.4    # Negativo: eje arriba=-1, queremos +v hacia adelante
       y: -0.4    # Negativo: eje izquierda=-1, queremos +v hacia la izquierda
     scale_linear_turbo:
-      x: -0.8
+      x: 0.8
       y: -0.8
 
     # Eje angular (yaw)
     axis_angular:
-      yaw: 2     # Right stick X → giro
+      yaw: 3     # Right stick X → giro
     scale_angular:
-      yaw: -1.2  # Negativo: ajusta sentido de giro si es necesario
+      yaw: 1.2  # Negativo: ajusta sentido de giro si es necesario
     scale_angular_turbo:
-      yaw: -2.0
+      yaw: 2.0
 
 joy_node:
   ros__parameters:

@@ -2,9 +2,6 @@
 # rrc_lite_params.yaml
 # Parámetros del driver RRC Lite / Huaner STM32
 # Robot: Mecanum 4WD + Encoders Hall 12PPR + relación 1:90
-#
-# ⚠️  CALIBRACIÓN PENDIENTE: mide tu chasis físico y actualiza estos valores.
-#     Usa el script de calibración de Hiwonder (ver docs) o mide con cinta.
 # =============================================================================
 
 rrc_lite_node:
@@ -20,9 +17,18 @@ rrc_lite_node:
     track_width:  0.140   # metros: distancia entre centros de rueda izq/der
     wheel_radius: 0.033   # metros: radio de las ruedas Mecanum (65mm diámetro)
 
+    # ── Calibración del motor (2026-06-27, medido en el suelo) ───────────────
+    # El firmware entrega ~22% de la velocidad comandada (cmd 0.45 m/s -> 0.10
+    # real, consistente). Se compensa multiplicando el rps por 4.5.
+    rps_calib: 4.5
+    # Robot MONTADO GIRADO 180° (la trasera quedó como frente): invierte vx y vy
+    # (el giro wz no cambia). Equivale al remapeo FL=M4, FR=M3, RL=M2, RR=M1.
+    body_reversed: true
+
     # ── Límites de velocidad ─────────────────────────────────────────────────
-    max_linear_vel:  0.5   # m/s
-    max_angular_vel: 2.0   # rad/s
+    # Bajos a proposito: con rps_calib=4.5 un cmd_vel alto saturaria el motor.
+    max_linear_vel:  0.25   # m/s
+    max_angular_vel: 1.5    # rad/s
 
     # ── Gimbal (plataforma 9IMOD Mini + 2 servos PWM) ─────────────────────────
     gimbal_pan_id:  1      # ID servo PWM en la placa (pan  = eje Z)
@@ -37,11 +43,15 @@ rrc_lite_node:
     base_frame: 'base_footprint'
     imu_frame:  'imu_link'
 
+    # El EKF (robot_localization) publica la TF odom->base_footprint fusionando
+    # /odom_raw + IMU. Por eso este nodo NO debe publicarla (doble publicador =
+    # TF inestable). Sigue publicando /odom_raw y /imu/data_raw para el EKF.
+    publish_odom_tf: false
+
 # =============================================================================
-# Notas sobre los encoders (para odometría futura con encoders reales):
-#   Motor TT metálico — codificador Hall 12 PPR, relación 1:90
-#   → Pulsos efectivos por revolución de rueda: 12 × 90 = 1080 PPR
-#   → Con cuadratura (×4): 4320 conteos/revolución
-#   La placa STM32 gestiona los encoders internamente y expone velocidad en RPS
-#   a través del protocolo serie (no se necesita leer ticks directamente).
+# Notas sobre los encoders (odometría):
+#   Motor TT metálico NULLLAB — codificador Hall 12 PPR, relación 1:90
+#   → Pulsos por revolución de rueda: 12 × 90 = 1080 (×4 cuadratura = 4320)
+#   La placa STM32 gestiona los encoders internamente y expone velocidad en RPS.
+#   La odometria se integra de la velocidad comandada (no de ticks de encoder).
 # =============================================================================

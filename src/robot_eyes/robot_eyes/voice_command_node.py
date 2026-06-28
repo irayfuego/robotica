@@ -35,6 +35,7 @@ Parameters (ver robot_eyes_params.yaml, seccion voice_command_node).
                   Preferir variable de entorno: no ponerla en el YAML (es publico).
 """
 
+import base64
 import datetime
 import json
 import os
@@ -107,6 +108,16 @@ DEFAULT_RULES = [
      'action': 'vol_up'},
     {'keys': ['mas bajo', 'mas bajito', 'baja el volumen', 'habla mas bajo'],
      'action': 'vol_down'},
+
+    # ---- control de la mirada por camara (seguir caras / descansar) --------
+    {'keys': ['sigueme con la mirada', 'sigue mi cara', 'mira a la gente',
+              'fijate en mi', 'vuelve a mirarme', 'mira a las personas',
+              'sigue las caras', 'mira a mi cara'],
+     'action': 'gaze_follow', 'say': 'Vale, te sigo con la mirada.'},
+    {'keys': ['deja de mirarme', 'deja de seguirme', 'descansa la mirada',
+              'no me mires', 'no me sigas', 'deja de seguir caras',
+              'relaja la mirada'],
+     'action': 'gaze_rest', 'say': 'Vale, descanso la mirada.'},
 
     # ---- reacciones expresivas ---------------------------------------------
     {'keys': ['asustate', 'que susto', 'da un susto'],
@@ -239,7 +250,30 @@ class GeminiClient:
         'look_around, look_left, look_right, look_up, look_down, look_center, '
         'scan, thinking, dizzy, roll_eyes, notice, dilate, wake_up] '
         'o cadena vacia.\n'
-        '- say: lo que dira el robot EN VOZ ALTA, en espanol, BREVE (1-2 frases).'
+        '- say: lo que dira el robot EN VOZ ALTA, en espanol, BREVE (1-2 frases).\n'
+        '- need_photo: true SOLO si para responder necesitas VER por la camara '
+        '(te preguntan que ves, que hay delante, de que color es algo, cuantos '
+        'dedos hay, quien soy, etc.); en cualquier otro caso false. Si pones '
+        'need_photo true, deja "say" vacio (ya hablaras al ver la foto).\n'
+        '- camera: controla la mirada/camara del robot segun lo que pida el '
+        'usuario. "follow" si quiere que le sigas/mires o prestes atencion (a el '
+        'o a la gente); "track" si quiere que sigas o te fijes en un OBJETO '
+        'concreto que tiene delante ("sigue esta pelota", "fijate en este '
+        'objeto"); "rest" si quiere que dejes de mirar o descanses; "emotion_on" '
+        'para imitar su cara/emociones; "emotion_off" para dejar de imitar; '
+        'cadena vacia si no aplica.'
+    )
+
+    _VISION_SYSTEM = (
+        'Eres el cerebro de un robot con ojos. Te paso una FOTO de lo que la '
+        'camara del robot esta viendo AHORA y lo que el usuario ha dicho. '
+        'Responde UNICAMENTE con un objeto JSON (sin texto ni marcas alrededor) '
+        'con: emotion, intensity, behavior, say. En "say" describe en español, '
+        'de forma natural y simpatica y BREVE (1-2 frases), lo que se ve en la '
+        'foto respondiendo a lo que pregunta el usuario. Si la imagen sale '
+        'oscura o no se distingue nada, dilo con naturalidad. Valores de '
+        'emotion/behavior como en el resto del sistema (p.ej. happy, surprised, '
+        'look_around) o cadena vacia.'
     )
 
     _SEARCH_NOTE = (
@@ -264,15 +298,52 @@ class GeminiClient:
             self._system += self._SEARCH_NOTE
         self._system += self._PERSONA
 
-    def dispatch(self, text, timeout=None):
+    def _call(self, payload, timeout):
+        """POST a Gemini con reintentos ante errores transitorios (503 modelo
+        saturado, 429 ritmo, 500, timeouts). Devuelve el body JSON o None.
+        Asi un pico puntual de Google no deja al robot sin responder."""
+        data = json.dumps(payload).encode('utf-8')
+        for attempt in range(3):
+            req = urllib.request.Request(
+                self._URL % (self._model, self._key), data=data,
+                headers={'Content-Type': 'application/json'}, method='POST')
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    return json.loads(r.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                code = e.code
+                detail = e.read().decode('utf-8', 'replace')[:150]
+                if code in (429, 500, 503) and attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))      # 2 s, luego 4 s
+                    continue
+                if self._log:
+                    self._log('Gemini HTTP %d: %s' % (code, detail))
+                return None
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(1.5)
+                    continue
+                if self._log:
+                    self._log('Gemini error: %s' % e)
+                return None
+        return None
+
+    def dispatch(self, text, history=None, timeout=None):
         """Llama a Gemini y devuelve {emotion, intensity, behavior, say}, o None.
-        Con grounding la busqueda web tarda mas (~8s), de ahi el timeout mayor."""
+        history: turnos previos [{'role':'user'/'model','text':...}] para dar hilo
+        conversacional (modo conversacion). Con grounding la busqueda web tarda
+        mas (~8s), de ahi el timeout mayor."""
         if timeout is None:
             timeout = 15.0 if self._grounding else 8.0
         gen_cfg = {'temperature': 0}
+        contents = []
+        for turn in (history or []):
+            contents.append({'role': turn['role'],
+                             'parts': [{'text': turn['text']}]})
+        contents.append({'role': 'user', 'parts': [{'text': text}]})
         payload = {
             'systemInstruction': {'parts': [{'text': self._system}]},
-            'contents': [{'role': 'user', 'parts': [{'text': text}]}],
+            'contents': contents,
             'generationConfig': gen_cfg,
         }
         if self._grounding:
@@ -284,30 +355,17 @@ class GeminiClient:
             gen_cfg['responseSchema'] = {
                 'type': 'OBJECT',
                 'properties': {
-                    'emotion':   {'type': 'STRING'},
-                    'intensity': {'type': 'NUMBER'},
-                    'behavior':  {'type': 'STRING'},
-                    'say':       {'type': 'STRING'},
+                    'emotion':    {'type': 'STRING'},
+                    'intensity':  {'type': 'NUMBER'},
+                    'behavior':   {'type': 'STRING'},
+                    'say':        {'type': 'STRING'},
+                    'need_photo': {'type': 'BOOLEAN'},
+                    'camera':     {'type': 'STRING'},
                 },
                 'required': ['emotion', 'intensity', 'behavior', 'say'],
             }
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            self._URL % (self._model, self._key), data=data,
-            headers={'Content-Type': 'application/json'}, method='POST')
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                body = json.loads(r.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            if self._log:
-                self._log('Gemini HTTP %d: %s'
-                          % (e.code, e.read().decode('utf-8', 'replace')[:200]))
-            return None
-        except Exception as e:
-            if self._log:
-                self._log('Gemini error: %s' % e)
-            return None
-        return self._parse(body)
+        body = self._call(payload, timeout)
+        return self._parse(body) if body is not None else None
 
     def _parse(self, body):
         """Extrae el JSON de la respuesta. Con grounding puede venir texto
@@ -336,14 +394,52 @@ class GeminiClient:
             except (TypeError, ValueError):
                 intensity = 1.0
             return {
-                'emotion':   str(obj.get('emotion',  '')).strip(),
-                'intensity': intensity,
-                'behavior':  str(obj.get('behavior', '')).strip(),
-                'say':       str(obj.get('say',      '')).strip(),
+                'emotion':    str(obj.get('emotion',  '')).strip(),
+                'intensity':  intensity,
+                'behavior':   str(obj.get('behavior', '')).strip(),
+                'say':        str(obj.get('say',      '')).strip(),
+                'need_photo': bool(obj.get('need_photo', False)),
+                'camera':     str(obj.get('camera', '')).strip(),
             }
         # Fallback: el modelo respondio en prosa (tipico tras una busqueda).
         say = txt.replace('`', '').strip()
-        return {'emotion': '', 'intensity': 1.0, 'behavior': '', 'say': say}
+        return {'emotion': '', 'intensity': 1.0, 'behavior': '', 'say': say,
+                'need_photo': False, 'camera': ''}
+
+    def dispatch_vision(self, image_bytes, instruction='', history=None,
+                        timeout=20.0):
+        """Como dispatch pero con una FOTO (JPEG) adjunta: el robot 'mira' por
+        la camara y describe lo que ve. Sin grounding (no tiene sentido buscar
+        con una imagen); responseSchema para JSON estructurado."""
+        b64 = base64.b64encode(image_bytes).decode('ascii')
+        contents = []
+        for turn in (history or []):
+            contents.append({'role': turn['role'],
+                             'parts': [{'text': turn['text']}]})
+        contents.append({'role': 'user', 'parts': [
+            {'text': instruction or 'Describe lo que ves.'},
+            {'inlineData': {'mimeType': 'image/jpeg', 'data': b64}},
+        ]})
+        payload = {
+            'systemInstruction': {'parts': [{'text': self._VISION_SYSTEM}]},
+            'contents': contents,
+            'generationConfig': {
+                'temperature': 0.4,
+                'responseMimeType': 'application/json',
+                'responseSchema': {
+                    'type': 'OBJECT',
+                    'properties': {
+                        'emotion':   {'type': 'STRING'},
+                        'intensity': {'type': 'NUMBER'},
+                        'behavior':  {'type': 'STRING'},
+                        'say':       {'type': 'STRING'},
+                    },
+                    'required': ['emotion', 'intensity', 'behavior', 'say'],
+                },
+            },
+        }
+        body = self._call(payload, timeout)
+        return self._parse(body) if body is not None else None
 
 
 # --------------------------------------------------------------------------- #
@@ -375,6 +471,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         # Busqueda de Google (grounding): permite responder datos reales
         # (tiempo, noticias...). Gratis hasta 1500 consultas/dia.
         self.declare_parameter('gemini_grounding', True)
+        # Modo conversacion: tras hablar con el LLM, sigue activo este tiempo sin
+        # repetir la wake-word (frases sueltas con "robot" cada vez pierden la
+        # gracia). La ventana cuenta desde que el robot TERMINA de hablar la
+        # respuesta (no desde que el LLM respondio). 0 = desactivado.
+        self.declare_parameter('conversation_sec', 45.0)
         # Captura de audio: 'local' = microfono INMP441 por I2S con arecord
         # (sin latencia de red); 'huskylens' = micro de la camara por su MCP.
         self.declare_parameter('audio_source',     'local')
@@ -402,6 +503,7 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._mic_gain   = float(self.get_parameter('mic_gain_db').value)
         self._cap_rate   = int(self.get_parameter('capture_rate').value)
         self._cap_ch     = int(self.get_parameter('capture_channels').value)
+        self._conv_sec   = float(self.get_parameter('conversation_sec').value)
 
         # Opciones SSH con conexion maestra persistente (ControlMaster): evita
         # el handshake en cada transferencia. La WiFi de la HuskyLens es lenta
@@ -433,6 +535,9 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._rules = DEFAULT_RULES
         self._mute_until = 0.0
         self._running = True
+        # Estado del modo conversacion (feature 'mantener charla 30s').
+        self._conv_until = 0.0      # timestamp hasta el que seguimos "en charla"
+        self._history = []          # turnos [{'role','text'}] para memoria del LLM
 
         # Publicadores
         self._pub_raw      = self.create_publisher(String, '/robot/voice_raw',     10)
@@ -443,6 +548,8 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         self._pub_voice_mode = self.create_publisher(String, '/robot/voice_mode', 10)
         # Control del TTS: 'stop' | 'repeat' | 'vol_up' | 'vol_down'.
         self._pub_tts_ctrl = self.create_publisher(String, '/robot/tts_control', 10)
+        # Control de la mirada por camara: 'follow' | 'rest' | 'emotion_on/off'.
+        self._pub_gaze_ctrl = self.create_publisher(String, '/robot/gaze_control', 10)
 
         # Auto-mute mientras el robot habla. Dos fuentes:
         #  - /robot/say: estimacion al publicar (cubre el hueco mientras Piper
@@ -500,6 +607,11 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         elif b == 'speaking_stop':
             # Termino el audio: deja un margen anti-eco/reverberacion.
             self._mute_until = time.time() + self._mute_marg
+            # Si hay conversacion en curso, la ventana para seguir hablando sin
+            # decir "robot" empieza a contar AHORA (al callar el robot), no
+            # desde que el LLM respondio: asi el usuario tiene el tiempo entero.
+            if self._conv_until > time.time():
+                self._conv_until = time.time() + self._conv_sec
 
     def _muted(self):
         return time.time() < self._mute_until
@@ -745,28 +857,56 @@ class VoiceCommandNode(Node if HAS_ROS else object):
         """
         norm = normalize(text)
 
-        # Modo conversacion con LLM: solo cuando se nombra al robot.
+        # ¿La frase va dirigida al LLM? Dos vias:
+        #  - menciona la wake-word ('robot ...'), o
+        #  - seguimos dentro de la ventana de conversacion (no hay que repetir
+        #    'robot' en cada frase). Cada respuesta del LLM reinicia la ventana.
+        in_conv = time.time() < self._conv_until
+        engaged = False
+        instruction = norm
         if self._wake and self._wake in norm:
+            if not in_conv:
+                self._history = []          # arranca una conversacion nueva
+            engaged = True
             instruction = norm.split(self._wake, 1)[1].strip() or norm
-            if self._gemini:
-                # Mirada de "estoy pensando" mientras se espera al LLM; se
-                # cancela al llegar la respuesta (o la pisa el TTS al hablar).
-                self._publish(self._pub_behavior, 'thinking_loop')
-                ok = self._dispatch_gemini(instruction)
-                self._publish(self._pub_behavior, 'thinking_loop_stop')
-                if ok:
-                    return
-            norm = instruction   # sin Gemini o fallo -> reglas con la instruccion
+        elif in_conv:
+            engaged = True                  # charla en curso: frase directa
+            instruction = norm
+
+        if engaged and self._gemini:
+            # Acuse inmediato de "te he oido" ANTES de llamar al LLM: bip corto
+            # + ojos pensando. Asi se sabe que cogio la instruccion y no se
+            # repite. (El bip lo emite el TTS por /robot/tts_control.)
+            self._publish(self._pub_tts_ctrl, 'beep:ack')
+            self._publish(self._pub_behavior, 'thinking_loop')
+            if self._wants_vision(instruction):
+                ok = self._vision_flow(instruction)      # "que ves" -> camara
+            else:
+                ok = self._dispatch_gemini(instruction)  # (puede pedir foto)
+            self._publish(self._pub_behavior, 'thinking_loop_stop')
+            if ok:
+                self._conv_until = time.time() + self._conv_sec
+                return
+            norm = instruction              # fallo del LLM -> reglas
+        elif engaged:
+            norm = instruction              # sin Gemini configurado -> reglas
 
         # Reglas locales: unico camino sin wake-word y fallback del LLM.
         self._dispatch_rules(norm)
 
     def _dispatch_gemini(self, instruction):
-        """Llama a Gemini y publica el resultado. True si tuvo exito."""
-        result = self._gemini.dispatch(instruction)
+        """Llama a Gemini (con memoria de la conversacion) y publica el
+        resultado. True si tuvo exito."""
+        result = self._gemini.dispatch(instruction, history=self._history)
         if result is None:
             self.get_logger().warn('Gemini fallo; usando reglas de palabras clave.')
             return False
+        # El LLM ha decidido que necesita VER por la camara para responder.
+        if result.get('need_photo'):
+            return self._vision_flow(instruction)
+        # El LLM decide el modo de mirada/camara segun la intencion.
+        if result.get('camera'):
+            self._publish(self._pub_gaze_ctrl, result['camera'])
         if result['emotion']:
             # "emocion:intensidad" -> robot_eyes_node modula la expresion
             intensity = result.get('intensity', 1.0)
@@ -776,8 +916,81 @@ class VoiceCommandNode(Node if HAS_ROS else object):
             self._publish(self._pub_behavior, result['behavior'])
         if result['say']:
             self._publish(self._pub_say, result['say'])
+        # Memoria conversacional: guarda el turno (acotada a los ultimos 6 =
+        # 3 intercambios) para no disparar el gasto de tokens.
+        self._history.append({'role': 'user',  'text': instruction})
+        self._history.append({'role': 'model', 'text': result['say'] or '(accion)'})
+        self._history = self._history[-6:]
         self.get_logger().info('Gemini -> %s' % result)
         return True
+
+    # --------------------------------------------------------------- vision
+    # Frases que piden ver por la camara. Ademas, en cualquier pregunta el LLM
+    # puede decidir que necesita una foto (campo need_photo) y se dispara igual.
+    VISION_KEYS = ['que ves', 'que estas viendo', 'que hay', 'que tienes delante',
+                   'describe lo que ves', 'mira y dime', 'que ves ahora',
+                   'que distingues', 'que aparece', 'usa la camara',
+                   'mira con la camara', 'que ves tu', 'puedes ver']
+
+    def _wants_vision(self, instruction):
+        return any(k in instruction for k in self.VISION_KEYS)
+
+    def _vision_flow(self, instruction):
+        """Toma una foto con la HuskyLens, se la pasa a Gemini (vision) y dice
+        lo que ve. Devuelve True salvo error irrecuperable (para no caer a
+        reglas y repetir la frase)."""
+        self._publish(self._pub_tts_ctrl, 'beep:wait')   # "procesando"
+        img = self._capture_photo()
+        if img is None:
+            self._publish(self._pub_say, 'No he podido usar la camara ahora mismo.')
+            return True
+        result = self._gemini.dispatch_vision(img, instruction=instruction,
+                                              history=self._history)
+        if result is None:
+            self._publish(self._pub_say, 'No consigo distinguir lo que hay.')
+            return True
+        if result['emotion']:
+            self._publish(self._pub_emotion, '%s:%.2f'
+                          % (result['emotion'], result.get('intensity', 1.0)))
+        if result['behavior']:
+            self._publish(self._pub_behavior, result['behavior'])
+        if result['say']:
+            self._publish(self._pub_say, result['say'])
+        # Memoria: deja constancia de que se miro (sin guardar la imagen).
+        self._history.append({'role': 'user',  'text': instruction + ' [foto de la camara]'})
+        self._history.append({'role': 'model', 'text': result['say'] or '(mira)'})
+        self._history = self._history[-6:]
+        self.get_logger().info('Vision -> %s' % result.get('say', ''))
+        return True
+
+    def _capture_photo(self):
+        """take_photo en la HuskyLens (MCP) y trae el JPEG al Pi por ssh.
+        Devuelve los bytes de la imagen o None."""
+        ok, info = self._mcp.call_tool(
+            'multimedia_control',
+            {'operation': 'take_photo', 'resolution': '1280x720'}, timeout=20.0)
+        if not ok:
+            self.get_logger().warn('take_photo fallo: %s' % info)
+            return None
+        try:
+            fname = json.loads(info).get('filename', '')
+        except Exception:
+            fname = ''
+        if not fname:
+            self.get_logger().warn('take_photo sin filename: %r' % info[:200])
+            return None
+        remote = '/opt/user/mtp/photo/%s' % fname
+        try:
+            r = subprocess.run(
+                ['ssh'] + self._ssh_cm + ['%s@%s' % (self._ssh_user, self._host),
+                                          "cat '%s'" % remote],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+            if r.returncode == 0 and r.stdout:
+                return r.stdout
+            self.get_logger().warn('cat de la foto vacio (rc=%d)' % r.returncode)
+        except Exception as e:
+            self.get_logger().warn('No se pudo traer la foto: %s' % e)
+        return None
 
     def _dispatch_rules(self, norm):
         for rule in self._rules:
@@ -843,6 +1056,12 @@ class VoiceCommandNode(Node if HAS_ROS else object):
 
     def _act_vol_down(self):
         self._publish(self._pub_tts_ctrl, 'vol_down')
+
+    def _act_gaze_follow(self):
+        self._publish(self._pub_gaze_ctrl, 'follow')
+
+    def _act_gaze_rest(self):
+        self._publish(self._pub_gaze_ctrl, 'rest')
 
     def _publish(self, pub, value):
         m = String(); m.data = value

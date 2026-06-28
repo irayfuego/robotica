@@ -374,7 +374,7 @@ int send_lidar_data(LaserScan &outscan)
 			{
 				LaserPoint point;
 				LaserPoint point_check;
-				angle = static_cast<float>((node_lidar.scan_node_buf[count -i].angle_q6_checkbit >>
+				angle = static_cast<float>((node_lidar.scan_node_buf[i].angle_q6_checkbit >>
 											LIDAR_RESP_MEASUREMENT_ANGLE_SHIFT) /64.0f);
 				range = (node_lidar.scan_node_buf[i].distance_q2/1000.0f);
 				intensity = node_lidar.scan_node_buf[i].sync_quality;
@@ -632,8 +632,12 @@ int node_start(int argc, char **argv)
 		{
 			auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
 
-			scan_msg->ranges.resize(scan.points.size());
-			scan_msg->intensities.resize(scan.points.size());
+			// Conteo de haces FIJO: SLAM Toolbox rechaza scans cuyo numero de
+			// haces difiera del primero. El lidar da 398/399/400 puntos por
+			// vuelta -> normalizamos a 400 (rellena/trunca) con incremento fijo.
+			const int FIXED_BEAMS = 400;
+			scan_msg->ranges.assign(FIXED_BEAMS, 0.0f);
+			scan_msg->intensities.assign(FIXED_BEAMS, 0.0f);
 
 			// Use ROS clock for correct timestamp (boot-time stamp causes DDS assertion)
 			scan_msg->header.stamp = node->get_clock()->now();
@@ -641,14 +645,20 @@ int node_start(int argc, char **argv)
 
 			scan_msg->angle_min = scan.config.min_angle;
 			scan_msg->angle_max = scan.config.max_angle;
-			scan_msg->angle_increment = scan.config.angle_increment;
+			scan_msg->angle_increment = (scan.config.max_angle - scan.config.min_angle) / FIXED_BEAMS;
 			scan_msg->scan_time = scan.config.scan_time;
 			scan_msg->time_increment = scan.config.time_increment;
 			scan_msg->range_min = scan.config.min_range;
 			scan_msg->range_max = scan.config.max_range;
-			for(int i=0; i < scan.points.size(); i++) {
-				scan_msg->ranges[i] = scan.points[i].range;
-				scan_msg->intensities[i] = scan.points[i].intensity;
+			int npts = (int)scan.points.size();
+			for(int i=0; i < npts; i++) {
+				// Cada haz en el bin de SU angulo real (angulo y distancia ya
+				// vienen del mismo indice de buffer tras el Edit 1).
+				float a = scan.points[i].angle;  // grados [0,360)
+				int j = (int)(a / 360.0f * FIXED_BEAMS + 0.5f);
+				j = ((j % FIXED_BEAMS) + FIXED_BEAMS) % FIXED_BEAMS;
+				scan_msg->ranges[j] = scan.points[i].range;
+				scan_msg->intensities[j] = scan.points[i].intensity;
 			}
 			{ static int pub_count=0; if((++pub_count % 100)==0) printf("Published %d scans, ranges=%zu\n", pub_count, scan_msg->ranges.size()); }
 			laser_pub->publish(*scan_msg);

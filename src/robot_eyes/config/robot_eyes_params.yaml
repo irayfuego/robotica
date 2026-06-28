@@ -66,9 +66,23 @@ huskylens_gaze_bridge:
     #             No requiere aprendizaje.
     algo:       13
 
-    # Mapa de emociones (solo se usa cuando algo=13).
+    # Mapa de emociones (solo se usa si publish_emotion=true).
     # Ajusta los IDs si tu firmware los tiene en orden diferente (ver logs).
     emotion_map: "1:neutral,2:happy,3:sad,4:surprised,5:angry,6:confused,7:suspicious"
+
+    # Imitar la emocion de las caras detectadas. false (defecto) = el robot
+    # sigue la cara con la MIRADA pero NO copia la emocion (resultaba invasivo
+    # y disparaba 'angry'/rojo todo el rato). Se puede activar en marcha por voz
+    # ("imita mis emociones") o por /robot/gaze_control 'emotion_on'.
+    publish_emotion: false
+
+    # Seguimiento de la mirada hacia la cara/persona detectada.
+    # gaze_gain: amplifica el movimiento del iris (sube si se mueve poco).
+    # gaze_invert_x / gaze_invert_y: invierte un eje si, al probar, el robot
+    # mira al lado contrario de donde te mueves (depende del montaje de la camara).
+    gaze_gain:     1.8
+    gaze_invert_x: true
+    gaze_invert_y: false
 
 # TTS por el altavoz de la HuskyLens.
 # Publica texto en /robot/say (std_msgs/String) y se oye por la camara:
@@ -150,3 +164,18 @@ voice_command_node:
     # (tiempo, noticias, hechos actuales). Gratis hasta 1500 consultas/dia;
     # despues 35$/1000. false = solo conocimiento del modelo (sin internet).
     gemini_grounding:  true
+    # Modo conversacion: tras hablar con el LLM, sigue activo este tiempo (s)
+    # sin tener que repetir "robot". La ventana cuenta DESDE que el robot
+    # termina de hablar la respuesta. 0 = desactivado (siempre hay que decir "robot").
+    conversation_sec:  45.0
+
+# Aviso de bateria baja (battery_alert_node): vigila /battery_voltage (lo
+# publica el rrc_lite_node leyendo la placa RRC Lite) y, al bajar de los
+# umbrales, pone cara de cansancio y dice por voz el porcentaje que queda.
+battery_alert_node:
+  ros__parameters:
+    battery_cells:   3        # 3S por defecto (la RRC admite 5-12.6 V)
+    warn_pct:        30       # primer aviso suave
+    low_pct:         15       # "enchufame, por favor"
+    critical_pct:    7        # apagado inminente
+    reannounce_sec:  180.0    # repetir el aviso si sigue bajo (s)

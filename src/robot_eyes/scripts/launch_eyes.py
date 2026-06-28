@@ -21,10 +21,10 @@ PARAMS_FILE = "/home/mimavi/robotica_ws/src/robot_eyes/config/robot_eyes_params.
 def main():
     rclpy.init(args=["--ros-args", "--params-file", PARAMS_FILE])
 
-    eyes_node   = RobotEyesNode()
-    bridge_node = HuskyLensGazeBridge()
-    tts_node    = HuskyLensTtsNode()
-    voice_node  = VoiceCommandNode()
+    eyes_node    = RobotEyesNode()
+    bridge_node  = HuskyLensGazeBridge()
+    tts_node     = HuskyLensTtsNode()
+    voice_node   = VoiceCommandNode()
 
     executor = MultiThreadedExecutor()
     executor.add_node(eyes_node)

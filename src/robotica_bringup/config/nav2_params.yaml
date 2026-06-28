@@ -324,11 +324,11 @@ velocity_smoother:
 # ─────────────────────────────────────────────────────────────────────────────
 # Lifecycle Manager
 # ─────────────────────────────────────────────────────────────────────────────
-lifecycle_manager:
+lifecycle_manager_navigation:
   ros__parameters:
     use_sim_time: false
     autostart: true
-    bond_timeout: 4.0
+    bond_timeout: 0.0
     attempt_respawn_reconnection: true
     bond_respawn_max_duration: 10.0
     node_names:

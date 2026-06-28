@@ -108,6 +108,7 @@ class HiwonderBoard:
 
         self._lock_pwm  = threading.Lock()
         self._lock_bus  = threading.Lock()
+        self._lock_port = threading.Lock()   # serializa escrituras al puerto
 
         self._q_sys      = queue.Queue(maxsize=1)
         self._q_imu      = queue.Queue(maxsize=1)
@@ -149,7 +150,13 @@ class HiwonderBoard:
     def _send(self, func: Func, data: list):
         buf = [0xAA, 0x55, int(func), len(data)] + data
         buf.append(_crc8(bytes(buf[2:])))
-        self._port.write(bytes(buf))
+        # Lock + flush: a 1 Mbaud, sin garantizar la transmision los comandos
+        # (incluido el STOP) se perdian de forma intermitente. flush() bloquea
+        # hasta que el byte sale por el cable; el lock evita que el hilo de
+        # recepcion u otro envio se solapen.
+        with self._lock_port:
+            self._port.write(bytes(buf))
+            self._port.flush()
 
     # ── Recepción (hilo daemon) ─────────────────────────────────────────────
     def _recv_loop(self):

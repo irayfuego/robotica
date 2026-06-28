@@ -19,8 +19,10 @@ Parámetros:
     wheelbase      (float)   0.148   # MEDIR en el robot real
     track_width    (float)   0.140   # MEDIR en el robot real
     wheel_radius   (float)   0.033   # MEDIR en el robot real
-    max_linear_vel (float)   0.5     m/s
-    max_angular_vel(float)   2.0     rad/s
+    rps_calib      (float)   4.5     # el firmware da ~22% -> compensar x4.5
+    body_reversed  (bool)    True    # robot montado girado 180 (trasera=frente)
+    max_linear_vel (float)   0.25    m/s  (limitado para no saturar el motor)
+    max_angular_vel(float)   1.5     rad/s
     gimbal_pan_id  (int)     1       servo PWM id para pan
     gimbal_tilt_id (int)     2       servo PWM id para tilt
     pan_center     (int)     1500    µs posición central pan
@@ -78,8 +80,10 @@ class RrcLiteNode(Node):
         self.declare_parameter('wheelbase',       0.148)
         self.declare_parameter('track_width',     0.140)
         self.declare_parameter('wheel_radius',    0.033)
-        self.declare_parameter('max_linear_vel',  0.5)
-        self.declare_parameter('max_angular_vel', 2.0)
+        self.declare_parameter('rps_calib',       4.5)
+        self.declare_parameter('body_reversed',   True)
+        self.declare_parameter('max_linear_vel',  0.25)
+        self.declare_parameter('max_angular_vel', 1.5)
         self.declare_parameter('gimbal_pan_id',   1)
         self.declare_parameter('gimbal_tilt_id',  2)
         self.declare_parameter('pan_center',      1500)
@@ -89,12 +93,17 @@ class RrcLiteNode(Node):
         self.declare_parameter('odom_frame',      'odom')
         self.declare_parameter('base_frame',      'base_footprint')
         self.declare_parameter('imu_frame',       'imu_link')
+        # Si hay EKF (robot_localization) publicando odom->base, este nodo NO
+        # debe publicar tambien esa TF (doble publicador = TF inestable).
+        self.declare_parameter('publish_odom_tf', True)
 
         device      = self.get_parameter('device').value
         baudrate    = self.get_parameter('baudrate').value
         wheelbase   = self.get_parameter('wheelbase').value
         track_width = self.get_parameter('track_width').value
         wheel_rad   = self.get_parameter('wheel_radius').value
+        rps_calib   = self.get_parameter('rps_calib').value
+        body_rev    = self.get_parameter('body_reversed').value
         self._max_v = self.get_parameter('max_linear_vel').value
         self._max_w = self.get_parameter('max_angular_vel').value
         self._pan_id    = self.get_parameter('gimbal_pan_id').value
@@ -106,6 +115,7 @@ class RrcLiteNode(Node):
         self._odom_fr   = self.get_parameter('odom_frame').value
         self._base_fr   = self.get_parameter('base_frame').value
         self._imu_fr    = self.get_parameter('imu_frame').value
+        self._publish_odom_tf = self.get_parameter('publish_odom_tf').value
 
         # ── Hardware ─────────────────────────────────────────────────────────
         self.get_logger().info(f'Conectando a placa Hiwonder en {device}...')
@@ -118,7 +128,12 @@ class RrcLiteNode(Node):
             self.get_logger().error(f'❌ Error al conectar con la placa: {e}')
             raise
 
-        self._kinematics = MecanumKinematics(wheelbase, track_width, wheel_rad)
+        self._kinematics = MecanumKinematics(wheelbase, track_width, wheel_rad,
+                                             rps_calib=rps_calib,
+                                             body_reversed=body_rev)
+        self.get_logger().info(
+            f'Cinematica: rps_calib={rps_calib}  body_reversed={body_rev}  '
+            f'max_v={self._max_v}  max_w={self._max_w}')
 
         # ── Estado odometría ──────────────────────────────────────────────────
         self._x   = 0.0
@@ -228,7 +243,8 @@ class RrcLiteNode(Node):
         tf.transform.translation.z = 0.0
         tf.transform.rotation.z = qz
         tf.transform.rotation.w = qw
-        self._tf_pub.sendTransform(tf)
+        if self._publish_odom_tf:
+            self._tf_pub.sendTransform(tf)
 
         # Odometry msg
         odom = Odometry()

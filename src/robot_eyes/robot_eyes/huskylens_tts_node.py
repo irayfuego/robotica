@@ -285,6 +285,7 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         self._last_text = ''      # ultima frase dicha (para 'repite')
         self._aplay_proc = None   # subproceso de aplay en curso (para 'callate')
         self._vol_db = 0.0        # ajuste de volumen software (dB), por voz
+        self._beeps = {}          # wav de beeps de UI (generados al arrancar)
 
         self.create_subscription(String, '/robot/say', self._cb_say, 10)
         # Cambio de voz por voz: 'furby' / 'normal'.
@@ -358,6 +359,68 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         elif cmd == 'vol_down':
             self._vol_db = max(-24.0, self._vol_db - 3.0)
             self.get_logger().info('TTS volumen: %+.0f dB' % self._vol_db)
+        elif cmd.startswith('beep'):
+            # 'beep' o 'beep:<tipo>' (ready/ack/wait). Sonido corto de UI, en
+            # hilo aparte para no bloquear el callback de ROS.
+            kind = cmd.split(':', 1)[1] if ':' in cmd else 'ack'
+            threading.Thread(target=self._play_beep, args=(kind,),
+                             daemon=True).start()
+
+    # ---------------------------------------------------------------- beeps UI
+    # Tonos sinteticos cortos para feedback, sin usar Piper: 'ready' al terminar
+    # de arrancar, 'ack' al recibir una instruccion para el LLM, 'wait' mientras
+    # procesa (p.ej. la vision). Se generan una vez con sox y se cachean.
+    _BEEP_SPECS = {
+        'ready': [(784, 0.12), (1046, 0.16)],   # dos notas ascendentes = "listo"
+        'ack':   [(1175, 0.09)],                # bip corto agudo = "te oigo"
+        'wait':  [(587, 0.10)],                 # bip grave = "procesando"
+    }
+
+    def _gen_beeps(self):
+        """Genera los WAV de los beeps una vez (sox): una o varias notas
+        senoidales cortas concatenadas, con fade para que no chasqueen."""
+        for kind, notes in self._BEEP_SPECS.items():
+            out = os.path.join(self._tmp, 'beep_%s.wav' % kind)
+            parts = []
+            try:
+                for i, (freq, dur) in enumerate(notes):
+                    p = os.path.join(self._tmp, 'beep_%s_%d.wav' % (kind, i))
+                    subprocess.run(
+                        ['sox', '-n', '-r', '48000', '-c', '1', p,
+                         'synth', '%.3f' % dur, 'sine', str(freq),
+                         'fade', 'q', '0.004', '%.3f' % dur, '0.03',
+                         'vol', '0.5'],
+                        check=True, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=10)
+                    parts.append(p)
+                if len(parts) == 1:
+                    os.replace(parts[0], out)
+                else:
+                    subprocess.run(['sox'] + parts + [out], check=True,
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=10)
+                    for p in parts:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+                self._beeps[kind] = out
+            except Exception as e:
+                self.get_logger().warn('No se pudo generar beep %s: %s' % (kind, e))
+
+    def _play_beep(self, kind):
+        """Reproduce un beep por el altavoz local (aplay). Solo en sink local."""
+        if self._sink != 'local':
+            return
+        path = self._beeps.get(kind) or self._beeps.get('ack')
+        if not path or not os.path.exists(path):
+            return
+        try:
+            subprocess.run(['aplay', '-q', '-D', self._alsa_dev, path],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
 
     # -------------------------------------------------------------- worker
     def _open_ssh_master(self):
@@ -402,6 +465,10 @@ class HuskyLensTtsNode(Node if HAS_ROS else object):
         if self._sink != 'local':
             self._open_ssh_master()
         self._load_voice()
+        # Beep de arranque: con Piper ya cargado (lo ultimo en estar listo) el
+        # robot esta operativo -> sonido de confirmacion de "ya he arrancado".
+        self._gen_beeps()
+        self._play_beep('ready')
         while self._running:
             try:
                 text = self._queue.get(timeout=0.5)

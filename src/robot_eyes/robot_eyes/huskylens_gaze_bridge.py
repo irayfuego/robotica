@@ -25,6 +25,7 @@ Wiring (I2C bus 1):
 """
 
 import struct
+import threading
 import time
 
 import rclpy
@@ -248,6 +249,17 @@ class HuskyLensGazeBridge(Node):
         self.declare_parameter('hl_width',   _HL_W)
         self.declare_parameter('hl_height',  _HL_H)
         self.declare_parameter('emotion_map', '')
+        # Imitar la emocion de las caras detectadas. Por defecto NO: el robot
+        # sigue la cara con la mirada pero no copia la emocion (resultaba
+        # invasivo y disparaba 'angry'/rojo). Activable en marcha por voz via
+        # /robot/gaze_control con 'emotion_on' / 'emotion_off'.
+        self.declare_parameter('publish_emotion', False)
+        # Seguimiento de mirada: ganancia (amplifica el movimiento del iris para
+        # que el seguimiento se note) e inversion de cada eje, por si la camara
+        # esta montada/orientada de forma que el eje sale al reves.
+        self.declare_parameter('gaze_gain',     1.8)
+        self.declare_parameter('gaze_invert_x', False)
+        self.declare_parameter('gaze_invert_y', False)
 
         bus_num        = self.get_parameter('i2c_bus').value
         hz             = self.get_parameter('hz').value
@@ -255,6 +267,10 @@ class HuskyLensGazeBridge(Node):
         self._hlw      = self.get_parameter('hl_width').value
         self._hlh      = self.get_parameter('hl_height').value
         emap_str       = self.get_parameter('emotion_map').value
+        self._publish_emotion = bool(self.get_parameter('publish_emotion').value)
+        self._gain  = float(self.get_parameter('gaze_gain').value)
+        self._inv_x = bool(self.get_parameter('gaze_invert_x').value)
+        self._inv_y = bool(self.get_parameter('gaze_invert_y').value)
 
         self._emotion_map = dict(_DEFAULT_EMOTION_MAP)
         if emap_str:
@@ -271,6 +287,13 @@ class HuskyLensGazeBridge(Node):
         # ROS services for software learn / forget (no physical button needed)
         self.create_service(Trigger, '/huskylens/learn',  self._srv_learn)
         self.create_service(Trigger, '/huskylens/forget', self._srv_forget)
+
+        # Control de la mirada por voz: 'follow' (sigue caras con la mirada,
+        # por defecto) | 'rest' (no controla los ojos -> idle) |
+        # 'emotion_on' / 'emotion_off' (imitar emociones).
+        self._gaze_enabled = True
+        self.create_subscription(String, '/robot/gaze_control',
+                                 self._cb_gaze_control, 10)
 
         self._gx              = 0.0
         self._gy              = 0.0
@@ -329,6 +352,54 @@ class HuskyLensGazeBridge(Node):
         return response
 
     # ------------------------------------------------------------------
+    # Gaze control (by voice)
+    # ------------------------------------------------------------------
+
+    def _cb_gaze_control(self, msg):
+        m = msg.data.strip().lower()
+        if m in ('follow', 'on', 'seguir', 'face'):
+            self._gaze_enabled = True
+            self._switch_algo_async(_ALGO_FACE_EMOTION)    # seguir caras
+            self.get_logger().info('Mirada por camara: SEGUIR (caras)')
+        elif m in ('track', 'track_object', 'objeto'):
+            self._gaze_enabled = True
+            self._switch_algo_async(_ALGO_OBJ_TRACKING, learn_after=True)
+            self.get_logger().info('Mirada por camara: SEGUIR OBJETO')
+        elif m in ('rest', 'off', 'reposo', 'descansa'):
+            self._gaze_enabled = False
+            self.get_logger().info('Mirada por camara: REPOSO')
+        elif m == 'emotion_on':
+            self._publish_emotion = True
+            self._gaze_enabled = True
+            self._switch_algo_async(_ALGO_FACE_EMOTION)
+            self.get_logger().info('Mirada por camara: imitar emociones ON')
+        elif m == 'emotion_off':
+            self._publish_emotion = False
+            self.get_logger().info('Mirada por camara: imitar emociones OFF')
+
+    def _switch_algo_async(self, algo, learn_after=False):
+        """Cambia el algoritmo de la HuskyLens en un hilo (el switch puede
+        bloquear varios segundos) y, opcionalmente, aprende el objeto que tiene
+        delante (Object Tracking: aprende lo que ve en el centro para seguirlo)."""
+        def _work():
+            try:
+                if self._hl is None:
+                    return
+                if self._algo != algo:
+                    if not self._hl.switch_algorithm(algo):
+                        self.get_logger().warn('No se pudo cambiar a algo %d' % algo)
+                        return
+                    self._algo = algo
+                    self.get_logger().info('Algoritmo de camara -> %d' % algo)
+                if learn_after:
+                    time.sleep(0.3)
+                    oid = self._hl.learn(algo)
+                    self.get_logger().info('Objeto aprendido id=%d (a seguir)' % oid)
+            except Exception as e:
+                self.get_logger().warn('cambio de algoritmo fallo: %s' % e)
+        threading.Thread(target=_work, daemon=True).start()
+
+    # ------------------------------------------------------------------
     # Poll timer
     # ------------------------------------------------------------------
 
@@ -347,6 +418,7 @@ class HuskyLensGazeBridge(Node):
         if not blocks:
             # algo=13: if no face seen for 2 s, publish neutral to reset eyes
             if (self._algo == _ALGO_FACE_EMOTION
+                    and self._publish_emotion
                     and self._last_emotion is not None
                     and self._last_face_time > 0
                     and now - self._last_face_time > 2.0):
@@ -360,21 +432,33 @@ class HuskyLensGazeBridge(Node):
         self._last_face_time = now
         xc, yc, _w, _h, block_id = blocks[0]
 
-        # --- Gaze ---
-        raw_x =  (xc / (self._hlw / 2.0)) - 1.0
-        raw_y = -((yc / (self._hlh / 2.0)) - 1.0)
-        raw_x = max(-1.0, min(1.0, raw_x))
-        raw_y = max(-1.0, min(1.0, raw_y))
+        # --- Gaze: posicion de la cara en el frame -> mirada [-1,1] ---
+        # cx/cy en [-1,1] (centro del frame = 0). El eje vertical YA no se
+        # niega: la convencion del renderer (gaze_y+ = mirar abajo) coincide con
+        # yc+ = parte baja del frame. La ganancia amplifica el movimiento para
+        # que el seguimiento se vea; cada eje es invertible por parametro.
+        cx = (xc / (self._hlw / 2.0)) - 1.0
+        cy = (yc / (self._hlh / 2.0)) - 1.0
+        if self._inv_x:
+            cx = -cx
+        if self._inv_y:
+            cy = -cy
+        raw_x = max(-1.0, min(1.0, cx * self._gain))
+        raw_y = max(-1.0, min(1.0, cy * self._gain))
         a        = self._ALPHA
         self._gx = a * raw_x + (1.0 - a) * self._gx
         self._gy = a * raw_y + (1.0 - a) * self._gy
-        gaze_msg = Point()
-        gaze_msg.x = float(self._gx)
-        gaze_msg.y = float(self._gy)
-        self._pub_gaze.publish(gaze_msg)
 
-        # --- Emotion (algo=13 only, publish on change) ---
-        if self._algo == _ALGO_FACE_EMOTION:
+        # Solo movemos los ojos con la camara en modo 'follow'. En 'rest' se
+        # deja que el robot_eyes_node haga su idle (parpadeos/miradas).
+        if self._gaze_enabled:
+            gaze_msg = Point()
+            gaze_msg.x = float(self._gx)
+            gaze_msg.y = float(self._gy)
+            self._pub_gaze.publish(gaze_msg)
+
+        # --- Emotion (algo=13, solo si esta activada la imitacion) ---
+        if self._algo == _ALGO_FACE_EMOTION and self._publish_emotion:
             emotion = self._emotion_map.get(block_id)
             if emotion and emotion != self._last_emotion:
                 self._last_emotion = emotion
