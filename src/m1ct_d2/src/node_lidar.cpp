@@ -261,7 +261,7 @@ int read_forever()
 						node_lidar._lock.lock();
 						if((node_lidar.lidar_time.scan_time_current - node_lidar.lidar_time.scan_time_record) > 2000)
 						{
-							printf("full----- count=%d,time=%lld\n",scan_count,current_times());
+							// printf("full----- count=%d,time=%lld\n",scan_count,current_times());
 							node_lidar.lidar_time.scan_time_record = node_lidar.lidar_time.scan_time_current;
 						}
 						// Use system clock for scan timing — LIDAR hw timestamps unreliable after 1st scan
@@ -654,7 +654,7 @@ int node_start(int argc, char **argv)
 			for(int i=0; i < npts; i++) {
 				// Cada haz en el bin de SU angulo real (angulo y distancia ya
 				// vienen del mismo indice de buffer tras el Edit 1).
-				float a = scan.points[i].angle;  // grados [0,360)
+				float a = 360.0f - scan.points[i].angle;  // des-espejar (LIDAR CW -> ROS CCW)
 				int j = (int)(a / 360.0f * FIXED_BEAMS + 0.5f);
 				j = ((j % FIXED_BEAMS) + FIXED_BEAMS) % FIXED_BEAMS;
 				scan_msg->ranges[j] = scan.points[i].range;

@@ -113,6 +113,13 @@ def generate_launch_description():
     # ── TFs estaticos falsos (solo en sim_mode) ────────────────────────────────
     # Sin hardware no hay EKF ni SLAM publicando TFs.
     # Cadena completa: map → odom → base_footprint → base_link → laser_link
+    base_imu_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_link_to_imu_link',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'imu_link'],
+    )
+
     sim_map_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -198,6 +205,7 @@ def generate_launch_description():
         # TFs
         base_laser_tf,
         base_footprint_tf,
+        base_imu_tf,
         sim_map_tf,
         sim_odom_tf,
 

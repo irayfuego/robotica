@@ -62,13 +62,13 @@ controller_server:
     FollowPath:
       plugin: 'dwb_core::DWBLocalPlanner'
       debug_trajectory_details: false
-      min_vel_x: -0.4
-      min_vel_y: -0.4          # Mecanum: movimiento lateral
-      max_vel_x:  0.5
-      max_vel_y:  0.4
+      min_vel_x: -0.20
+      min_vel_y: 0.0          # Mecanum: movimiento lateral
+      max_vel_x:  0.22
+      max_vel_y:  0.0
       max_vel_theta: 1.5
       min_speed_xy: 0.0
-      max_speed_xy: 0.5
+      max_speed_xy: 0.22
       min_speed_theta: 0.0
       acc_lim_x:  2.5
       acc_lim_y:  2.5
@@ -77,7 +77,7 @@ controller_server:
       decel_lim_y:  -2.5
       decel_lim_theta: -3.2
       vx_samples:  20
-      vy_samples:  10          # muestras en Y para aprovechar Mecanum
+      vy_samples:  1          # muestras en Y para aprovechar Mecanum
       vtheta_samples: 20
       sim_time: 1.7
       linear_granularity: 0.05
@@ -292,6 +292,8 @@ amcl:
     resample_interval: 1
     robot_model_type: nav2_amcl::OmniMotionModel   # Mecanum → omnidireccional
     save_pose_rate: 0.5
+    set_initial_pose: true
+    initial_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0
