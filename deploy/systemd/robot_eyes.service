@@ -1,0 +1,14 @@
+[Unit]
+Description=Robot Eyes ROS2 Node
+After=network.target
+
+[Service]
+Type=simple
+User=mimavi
+Environment=HOME=/home/mimavi
+ExecStart=/bin/bash -c "source /home/mimavi/robotica_ws/install/setup.bash && source /opt/ros/jazzy/setup.bash && python3 /home/mimavi/launch_eyes.py"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

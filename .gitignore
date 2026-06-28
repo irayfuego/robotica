@@ -5,3 +5,6 @@ log/
 __pycache__/
 .colcon_install_layout
 src/ldlidar_stl_ros2/
+
+# Secreto: clave real de Gemini (usar la plantilla .template)
+deploy/systemd/robot_eyes.service.d/gemini.conf

@@ -1,0 +1,19 @@
+# Lineas relevantes para /boot/firmware/config.txt (Raspberry Pi 4B, Ubuntu 24.04)
+# Tras flashear el sistema, asegurar/añadir estas opciones y REINICIAR.
+# (Referencia extraida del Pi en funcionamiento; reconciliar con el config.txt real.)
+
+# --- Interfaces ---
+dtparam=audio=on
+dtparam=i2c_arm=on
+dtparam=spi=on
+dtparam=i2c_vc=on
+
+# --- USB OTG en modo host (dongle del mando 8BitDo, etc.) ---
+dtoverlay=dwc2,dr_mode=host
+
+# --- Pantallas (KMS + CMA para los displays de los ojos, GC9A01) ---
+dtoverlay=vc4-kms-v3d,cma-128
+
+# --- Audio I2S propio del Pi: micro INMP441 + amplificador MAX98357A ---
+# Usa el overlay 'googlevoicehat' (card full-duplex). Libera GPIO18 de las pantallas.
+dtoverlay=googlevoicehat-soundcard

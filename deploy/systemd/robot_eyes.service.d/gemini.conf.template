@@ -1,0 +1,10 @@
+[Service]
+# Plantilla del drop-in con la clave de Google Gemini que usa voice_command_node
+# (comandos de voz por LLM y vision). LA CLAVE REAL NO SE SUBE A GIT.
+#
+# Despliegue en un Pi nuevo:
+#   sudo mkdir -p /etc/systemd/system/robot_eyes.service.d
+#   sudo cp gemini.conf.template /etc/systemd/system/robot_eyes.service.d/gemini.conf
+#   sudo nano /etc/systemd/system/robot_eyes.service.d/gemini.conf   # pon tu clave
+#   sudo systemctl daemon-reload && sudo systemctl restart robot_eyes
+Environment=GEMINI_API_KEY=PON_AQUI_TU_CLAVE

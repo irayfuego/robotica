@@ -1,0 +1,38 @@
+[Unit]
+Description=Robot Mecanum - ROS 2 Bringup
+Documentation=https://github.com/irayfuego/robotica
+After=network-online.target systemd-udev-settle.service
+Wants=network-online.target systemd-udev-settle.service
+
+[Service]
+Type=simple
+User=mimavi
+Group=mimavi
+
+# Reiniciar si el proceso muere (p.ej. desconexión USB)
+Restart=on-failure
+RestartSec=10s
+
+# Tiempo máximo para arrancar antes de que systemd lo considere fallido
+TimeoutStartSec=120s
+
+# El script principal
+ExecStart=/home/mimavi/robot_start.sh
+
+# Matar todos los procesos hijos al parar
+KillMode=control-group
+KillSignal=SIGINT
+
+# Variables de entorno base
+Environment=HOME=/home/mimavi
+Environment=USER=mimavi
+
+# Acceso a dispositivos USB/serial (dialout ya en el grupo del usuario)
+SupplementaryGroups=dialout input
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robot-bringup
+
+[Install]
+WantedBy=multi-user.target
