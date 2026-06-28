@@ -27,16 +27,20 @@ de Vosk** (se indican abajo dónde van).
 git clone https://github.com/irayfuego/robotica.git ~/robotica_ws
 cd ~/robotica_ws
 
-# a) Instala ROS 2 Jazzy + dependencias apt
+# a) Instala ROS 2 Jazzy + dependencias apt (instalador, seguro en sistema limpio)
 ./deploy/scripts/setup_ros2_jazzy.sh
 
-# b) Prepara y compila el workspace (colcon build --symlink-install)
-./deploy/scripts/setup_workspace.sh
-#   (o, manualmente:)
-#   source /opt/ros/jazzy/setup.bash
-#   rosdep install --from-paths src --ignore-src -r -y    # si aplica
-#   colcon build --symlink-install
+# b) Compila el workspace con el codigo de ESTE repo
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src --ignore-src -r -y    # si aplica
+colcon build --symlink-install
+source install/setup.bash
 ```
+
+> ⚠️ **NO ejecutes `setup_workspace.sh` sobre el repo clonado.** Fue el *bootstrap
+> original*: GENERA los paquetes desde cero (heredocs embebidos) y SOBREESCRIBIRIA
+> el codigo actual con versiones antiguas. Se conserva en `deploy/scripts/` solo
+> como referencia historica del montaje inicial.
 
 > **LIDAR:** el driver en uso es **`m1ct_d2`** (ya está en el repo). El paquete
 > alternativo `ldlidar_stl_ros2` NO se incluye (gitignored, no se usa); si alguna
@@ -106,8 +110,8 @@ Para mapear/navegar, ver el **README.md** (secciones 5 y 6).
 ```
 deploy/
 ├── scripts/          # copias canónicas de los .sh del HOME + instaladores
-│   ├── setup_ros2_jazzy.sh   # instala ROS 2 Jazzy + apt
-│   ├── setup_workspace.sh    # deps + colcon build --symlink-install
+│   ├── setup_ros2_jazzy.sh   # instala ROS 2 Jazzy + apt (seguro)
+│   ├── setup_workspace.sh    # BOOTSTRAP ORIGINAL (genera el ws desde cero); NO ejecutar sobre el repo
 │   ├── robot_start.sh        # bringup completo (robot.launch.py)
 │   ├── robot_motors.sh       # bringup ligero (solo motores)
 │   ├── robot_test.sh         # bringup de prueba del LIDAR
