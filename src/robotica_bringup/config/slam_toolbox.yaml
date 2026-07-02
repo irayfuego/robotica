@@ -37,6 +37,11 @@ slam_toolbox:
     stack_size_to_use:       40000000  # bytes para la pila del solver
 
     # ── Parámetros de correlación (scan matching) ─────────────────────────────
+    # Ventana de busqueda del matcher (defaults 0.5/0.349): ampliada para
+    # tolerar el patinaje de las mecanum en parquet sin perder el anclaje.
+    correlation_search_space_dimension: 1.0
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
     do_loop_closing: true
     loop_search_maximum_distance: 5.0
     loop_match_minimum_chain_size: 10
