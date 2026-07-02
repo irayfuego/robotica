@@ -1,0 +1,12 @@
+[Unit]
+Description=Panel web de control del robot (puerto 8080)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/mimavi/robot_panel.py
+Restart=always
+RestartSec=3
+User=mimavi
+
+[Install]
+WantedBy=multi-user.target

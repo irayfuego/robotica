@@ -25,6 +25,11 @@ echo "========================================"
 
 # Lanzar bringup completo (con hardware real)
 # Quitar use_camera:=false si la HuskyLens está conectada
-exec ros2 launch robotica_bringup robot.launch.py \
-    use_camera:=false
+MODE=$(cat /home/mimavi/robot_mode 2>/dev/null || echo mapping)
+echo "$(date): modo seleccionado: $MODE"
+case "$MODE" in
+  navigation) exec ros2 launch robotica_bringup navigation.launch.py ;;
+  full)       exec ros2 launch robotica_bringup robot.launch.py use_camera:=false ;;
+  *)          exec ros2 launch robotica_bringup mapping.launch.py ;;
+esac
 
