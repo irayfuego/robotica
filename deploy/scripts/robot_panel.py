@@ -26,6 +26,8 @@ MAP_FILE = "/home/mimavi/robot_map"      # yaml del mapa activo para navegacion
 LOG_FILE = "/tmp/robot_bringup.log"
 MAPS_DIR = "/home/mimavi/maps"
 MODES = {"mapping": "Mapeo", "navigation": "Navegación", "full": "Completo"}
+EYES_YAML = WS + "/src/robot_eyes/config/robot_eyes_params.yaml"
+EMOTIONS = ("neutral", "happy", "sad", "surprised", "angry", "confused", "suspicious")
 
 _lock = threading.Lock()
 
@@ -200,6 +202,28 @@ def pgm_to_png(path, max_dim=900):
             + chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + chunk(b"IEND", b""))
 
 
+def panel_pub(*args):
+    """Publica en un topic de los ojos via el helper rclpy (~/panel_pub.py)."""
+    import shlex
+    q = " ".join(shlex.quote(a) for a in args)
+    return sh("source /opt/ros/jazzy/setup.bash && "
+              "timeout 15 python3 /home/mimavi/panel_pub.py " + q, 25)
+
+
+def tts_config(voice, speed):
+    speed = int(speed)
+    if not (80 <= speed <= 260):
+        return 1, "velocidad TTS fuera de rango (80-260)"
+    if not re.fullmatch(r"[a-z]{2}(-[a-z]{2,8})?", voice):
+        return 1, "voz invalida (ej: es, es-la, en)"
+    s = open(EYES_YAML, encoding="utf-8").read()
+    s = re.sub(r'(tts_voice:\s*")[^"]*(")', r"\g<1>%s\g<2>" % voice, s, count=1)
+    s = re.sub(r"(tts_speed:\s*)\d+", r"\g<1>%d" % speed, s, count=1)
+    open(EYES_YAML, "w", encoding="utf-8").write(s)
+    code, out = sh("sudo -n systemctl restart robot_eyes.service", 60)
+    return code, "TTS: voz '%s', velocidad %d. Ojos reiniciados (tardan unos segundos).\n%s" % (voice, speed, out)
+
+
 def do_action(action, arg):
     if action == "status":
         return 0, json.dumps(status(), ensure_ascii=False, indent=1)
@@ -253,6 +277,30 @@ def do_action(action, arg):
     if action == "joy_test":
         return sh("source /opt/ros/jazzy/setup.bash && "
                   "timeout 12 python3 /home/mimavi/joy_test.py" % (), 20)
+    if action == "eyes_say":
+        text = (arg or "").strip()[:200]
+        if not text:
+            return 1, "escribe algo que decir"
+        code, out = panel_pub("say", text)
+        return code, out or "Frase enviada: «%s»" % text
+    if action == "eyes_emotion":
+        if arg not in EMOTIONS:
+            return 1, "emocion invalida: %r" % arg
+        code, out = panel_pub("emotion", arg)
+        return code, out or "Emoción '%s' enviada." % arg
+    if action == "eyes_iris":
+        m = re.fullmatch(r"#?([0-9a-fA-F]{6})", arg or "")
+        if not m:
+            return 1, "color invalido (usa #rrggbb)"
+        r, g, b = (int(m.group(1)[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+        code, out = panel_pub("iris", "%.3f" % r, "%.3f" % g, "%.3f" % b)
+        return code, out or "Color de iris cambiado (en vivo, no persiste al reiniciar)."
+    if action == "tts_config":
+        try:
+            p = json.loads(arg)
+            return tts_config(p["voice"], p["speed"])
+        except (KeyError, ValueError) as e:
+            return 1, "parametros TTS invalidos: %s" % e
     if action == "restart_eyes":
         return sh("sudo -n systemctl restart robot_eyes.service && echo 'Ojos reiniciados.'", 60)
     if action == "reboot_pi":
@@ -318,6 +366,28 @@ PAGE = """<!DOCTYPE html>
  <button class="b-info" onclick="listMaps()">📃 Listar mapas</button>
  <div id="maps"></div>
  <div id="mapimg"></div>
+</details>
+
+<details><summary>👀 Ojos y voz</summary>
+ <input id="saytext" placeholder="escribe algo y el robot lo dirá…">
+ <button class="b-save" onclick="act('eyes_say',document.getElementById('saytext').value)">🗣️ Decir</button>
+ <div class="row">
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','happy')">😊</button>
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','sad')">😢</button>
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','surprised')">😮</button>
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','angry')">😠</button>
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','confused')">😕</button>
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','suspicious')">🤨</button>
+  <button class="b-info" style="margin:4px 0" onclick="act('eyes_emotion','neutral')">😐</button>
+ </div>
+ <div class="row" style="align-items:center">
+  <label style="flex:2">Color de iris (en vivo)</label>
+  <input type="color" id="iris" value="#3c78c8" style="height:42px;padding:2px">
+  <button class="b-nav" style="margin:0" onclick="act('eyes_iris',document.getElementById('iris').value)">Aplicar</button>
+ </div>
+ <div class="row"><div><label>Voz TTS (es, es-la, en…)</label><input id="ttsv" value="es"></div>
+ <div><label>Velocidad TTS (80-260)</label><input id="ttss" value="130"></div></div>
+ <button class="b-save" onclick="act('tts_config',JSON.stringify({voice:document.getElementById('ttsv').value,speed:parseInt(document.getElementById('ttss').value)}))">Aplicar TTS (reinicia ojos)</button>
 </details>
 
 <details><summary>🔧 Mantenimiento</summary>
