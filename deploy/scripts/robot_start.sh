@@ -28,7 +28,8 @@ echo "========================================"
 MODE=$(cat /home/mimavi/robot_mode 2>/dev/null || echo mapping)
 echo "$(date): modo seleccionado: $MODE"
 case "$MODE" in
-  navigation) exec ros2 launch robotica_bringup navigation.launch.py ;;
+  navigation) MAP=$(cat /home/mimavi/robot_map 2>/dev/null || echo /home/mimavi/maps/casa.yaml)
+              exec ros2 launch robotica_bringup navigation.launch.py map:="$MAP" ;;
   full)       exec ros2 launch robotica_bringup robot.launch.py use_camera:=false ;;
   *)          exec ros2 launch robotica_bringup mapping.launch.py ;;
 esac
