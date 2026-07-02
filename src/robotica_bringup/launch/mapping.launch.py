@@ -49,8 +49,9 @@ def generate_launch_description():
     # 3. Teleop: joy_node + teleop_twist_joy -> /cmd_vel DIRECTO
     #    (sin twist_mux; en mapeo no hay Nav2 ni collision_monitor)
     joy_node = Node(
-        package='joy', executable='joy_node', name='joy_node',
-        output='screen', parameters=[joy_yaml, {'device_id': 0}])
+        package='joy_linux', executable='joy_linux_node', name='joy_node',
+        output='screen', parameters=[joy_yaml, {'dev': '/dev/input/js0'}],
+        respawn=True, respawn_delay=1.0)  # joy_linux se reconecta solo (el joy SDL queda zombi)
     teleop_node = Node(
         package='teleop_twist_joy', executable='teleop_node',
         name='teleop_twist_joy_node', output='screen',

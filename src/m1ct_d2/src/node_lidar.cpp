@@ -654,6 +654,7 @@ int node_start(int argc, char **argv)
 			for(int i=0; i < npts; i++) {
 				// Cada haz en el bin de SU angulo real (angulo y distancia ya
 				// vienen del mismo indice de buffer tras el Edit 1).
+				if (scan.points[i].intensity < 30.0f) continue;  // eco debil = lectura no fiable (rebote/brillo)
 				float a = 360.0f - scan.points[i].angle;  // des-espejar (LIDAR CW -> ROS CCW)
 				int j = (int)(a / 360.0f * FIXED_BEAMS + 0.5f);
 				j = ((j % FIXED_BEAMS) + FIXED_BEAMS) % FIXED_BEAMS;
