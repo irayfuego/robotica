@@ -57,22 +57,6 @@ def generate_launch_description():
         name='teleop_twist_joy_node', output='screen',
         parameters=[joy_yaml])   # publica TwistStamped en /cmd_vel por defecto
 
-    # 3b. Odometria laser rf2o: mide el desplazamiento REAL comparando scans
-    # consecutivos -> inmune al patinaje de las mecanum en el parquet.
-    rf2o_node = Node(
-        package='rf2o_laser_odometry', executable='rf2o_laser_odometry_node',
-        name='rf2o_laser_odometry', output='screen',
-        arguments=['--ros-args', '--log-level', 'rf2o_laser_odometry:=warn'],
-        parameters=[{
-            'laser_scan_topic': '/scan',
-            'odom_topic': '/odom_rf2o',
-            'base_frame_id': 'base_footprint',
-            'odom_frame_id': 'odom',
-            'publish_tf': False,   # la TF odom->base_footprint la publica el EKF
-            'init_pose_from_topic': '',  # vacio: si no, espera un ground-truth de simulador y nunca arranca
-            'freq': 10.0,
-        }])
-
     # 4. TFs estaticos (base_footprint -> base_link -> laser_link)
     base_laser_tf = Node(
         package='tf2_ros', executable='static_transform_publisher',
@@ -114,6 +98,5 @@ def generate_launch_description():
         rrc_launch, lidar_launch,
         joy_node, teleop_node,
         base_laser_tf, base_footprint_tf, base_imu_tf,
-        ekf_node,
-        rf2o_node, slam_launch, foxglove_bridge,
+        ekf_node, slam_launch, foxglove_bridge,
     ])
